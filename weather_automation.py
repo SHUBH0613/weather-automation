@@ -351,7 +351,7 @@ async def fetch_windy_for_location(
             except Exception:
                 pass
 
-            table_data = await page.evaluate(r'''async (coord) => {
+            table_data = await page.evaluate(r'''() => {
                 const table = document.querySelector('.forecast-table__table');
                 if (!table) return null;
 
@@ -360,75 +360,94 @@ async def fetch_windy_for_location(
                 const rainTr = table.querySelector('.tr--rain');
                 const iconTr = table.querySelector('.tr--icon');
 
-                const dayTds = daysTr ? Array.from(daysTr.querySelectorAll('td')) : [];
-                const hours = hourTr ? Array.from(hourTr.querySelectorAll('td')).map(td => td.innerText.trim()) : [];
-                const rains = rainTr ? Array.from(rainTr.querySelectorAll('td')).map(td => td.innerText.trim()) : [];
-                const icons = iconTr ? Array.from(iconTr.querySelectorAll('td')).map(td => {
+                const dayTds = Array.from(daysTr ? daysTr.querySelectorAll('td') : []).map(td => ({
+                    text: td.innerText.trim(),
+                    colspan: parseInt(td.getAttribute('colspan') || '1')
+                }));
+                const hours = Array.from(hourTr ? hourTr.querySelectorAll('td') : []).map(td => td.innerText.trim());
+                const rains = Array.from(rainTr ? rainTr.querySelectorAll('td') : []).map(td => td.innerText.trim());
+                const icons = Array.from(iconTr ? iconTr.querySelectorAll('td') : []).map(td => {
                     const img = td.querySelector('img');
                     return img ? img.getAttribute('src') : '';
-                }) : [];
+                });
 
-                let webglCloud = null;
-                try {
-                    if (window.W && window.W.interpolator) {
-                        const interp = await window.W.interpolator.getLatLonInterpolator();
-                        if (interp) {
-                            const raw = await interp({ lat: coord.lat, lon: coord.lon });
-                            if (Array.isArray(raw) && raw.length > 0 && typeof raw[0] === 'number') {
-                                webglCloud = Math.round(raw[0]);
-                            }
-                        }
-                    }
-                } catch (e) {}
+                return { dayTds, hours, rains, icons };
+            }''')
 
-                let cursor = 0;
-                const daysResult = [];
-                for (let i = 0; i < dayTds.length; i++) {
-                    const td = dayTds[i];
-                    const colspan = parseInt(td.getAttribute('colspan') || '1');
-                    const dayHours = hours.slice(cursor, cursor + colspan);
-                    const dayRains = rains.slice(cursor, cursor + colspan);
-                    const dayIcons = icons.slice(cursor, cursor + colspan);
-
-                    let slotIdx = dayHours.indexOf("11AM");
-                    if (slotIdx === -1) slotIdx = dayHours.indexOf("10AM");
-                    if (slotIdx === -1) slotIdx = 0;
-
-                    const rText = dayRains[slotIdx] || "";
-                    const m = rText.match(/(\d+(?:\.\d+)?)/);
-                    const rainVal = m ? parseFloat(m[1]) : 0.0;
-
-                    const iconSrc = dayIcons[slotIdx] || "";
-                    let cloudPct = 0;
-                    if (i === 0 && webglCloud !== null) {
-                        cloudPct = webglCloud;
-                    } else {
-                        if (iconSrc.includes("1_") || iconSrc.includes("1.")) cloudPct = 5;
-                        else if (iconSrc.includes("2_") || iconSrc.includes("2.")) cloudPct = 20;
-                        else if (iconSrc.includes("3_") || iconSrc.includes("3.")) cloudPct = 50;
-                        else if (iconSrc.includes("4_") || iconSrc.includes("4.")) cloudPct = 75;
-                        else if (iconSrc.includes("5_") || iconSrc.includes("5.")) cloudPct = 95;
-                        else if (iconSrc.includes("18") || iconSrc.includes("19")) cloudPct = 85;
-                        else cloudPct = webglCloud !== null ? webglCloud : 20;
-                    }
-
-                    daysResult.push({ rain: rainVal, cloud: cloudPct });
-                    cursor += colspan;
-                }
-                return daysResult;
-            }''', {"lat": lat, "lon": lon})
-
-            if table_data and len(table_data) > 0:
+            if table_data and table_data.get("dayTds"):
                 break
         except Exception as e_att:
             if attempt == 1:
                 await page.wait_for_timeout(2000)
 
-    if table_data:
+    if table_data and table_data.get("dayTds"):
+        day_tds = table_data["dayTds"]
+        hours = table_data.get("hours", [])
+        rains = table_data.get("rains", [])
+        icons = table_data.get("icons", [])
+
+        cursor = 0
+        daytime_hours = {"8AM", "11AM", "2PM", "5PM"}
+        parsed_days = []
+
+        for d_info in day_tds:
+            colspan = d_info.get("colspan", 1)
+            d_hours = hours[cursor:cursor + colspan]
+            d_rains = rains[cursor:cursor + colspan]
+            d_icons = icons[cursor:cursor + colspan]
+
+            day_rain_sum = 0.0
+            day_clouds = []
+
+            for h_idx, hr in enumerate(d_hours):
+                if hr in daytime_hours:
+                    # Rain
+                    r_text = d_rains[h_idx] if h_idx < len(d_rains) else ""
+                    m = re.search(r'(\d+(?:\.\d+)?)', r_text)
+                    r_val = float(m.group(1)) if m else 0.0
+                    day_rain_sum += r_val
+
+                    # Cloud from icon
+                    ic = d_icons[h_idx] if h_idx < len(d_icons) else ""
+                    if "1_" in ic or "1." in ic: c = 5.0
+                    elif "2_" in ic or "2." in ic: c = 20.0
+                    elif "3_" in ic or "3." in ic: c = 50.0
+                    elif "4_" in ic or "4." in ic: c = 75.0
+                    elif "5_" in ic or "5." in ic: c = 95.0
+                    elif "18" in ic or "19" in ic: c = 85.0
+                    else: c = 20.0
+                    day_clouds.append(c)
+
+            # Fallback if no specific daytime slots were matched
+            if not day_clouds and d_hours:
+                for h_idx, hr in enumerate(d_hours):
+                    r_text = d_rains[h_idx] if h_idx < len(d_rains) else ""
+                    m = re.search(r'(\d+(?:\.\d+)?)', r_text)
+                    day_rain_sum += float(m.group(1)) if m else 0.0
+
+                    ic = d_icons[h_idx] if h_idx < len(d_icons) else ""
+                    if "1_" in ic or "1." in ic: c = 5.0
+                    elif "2_" in ic or "2." in ic: c = 20.0
+                    elif "3_" in ic or "3." in ic: c = 50.0
+                    elif "4_" in ic or "4." in ic: c = 75.0
+                    elif "5_" in ic or "5." in ic: c = 95.0
+                    elif "18" in ic or "19" in ic: c = 85.0
+                    else: c = 20.0
+                    day_clouds.append(c)
+
+            avg_cloud = round(sum(day_clouds) / len(day_clouds)) if day_clouds else 20.0
+            day_rain_sum = round(day_rain_sum, 1)
+
+            parsed_days.append({
+                "rain": day_rain_sum,
+                "cloud": avg_cloud
+            })
+            cursor += colspan
+
         for d in target_dates:
             offset = (d - today).days
-            if 0 <= offset < len(table_data):
-                item = table_data[offset]
+            if 0 <= offset < len(parsed_days):
+                item = parsed_days[offset]
                 r_val = item["rain"]
                 c_val = item["cloud"]
                 r_stat = classify_rain(r_val)
@@ -440,7 +459,7 @@ async def fetch_windy_for_location(
                     "remark": remark
                 }
                 d_fmt = d.strftime("%d %b").upper()
-                await emit(f"  Windy - {name} [{d_fmt}]: Rain {r_val}mm, Cloud {c_val}% ({remark})")
+                await emit(f"  Windy - {name} [{d_fmt}]: Rain {r_val}mm (8AM-5PM), Cloud {int(c_val)}% ({remark})")
     else:
         for d in target_dates:
             item = results_by_date[d]
