@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Daily Weather Update</title>
+  <title>Weather Automation — Multi-City & Date Range</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   <style>
@@ -13,6 +13,7 @@
       --bg:       #0b0f1a;
       --card:     #131928;
       --border:   #1e2d4a;
+      --border-focus: #3b82f6;
       --accent:   #3b82f6;
       --accent2:  #6366f1;
       --success:  #22c55e;
@@ -21,6 +22,8 @@
       --text:     #e2e8f0;
       --muted:    #64748b;
       --log-bg:   #0d1525;
+      --chip-bg:  rgba(59, 130, 246, 0.12);
+      --chip-border: rgba(59, 130, 246, 0.3);
     }
 
     body {
@@ -31,19 +34,18 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 24px;
+      padding: 20px 16px;
     }
 
     .card {
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: 20px;
-      padding: 48px 40px 40px;
+      padding: 36px 32px 32px;
       width: 100%;
-      max-width: 580px;
+      max-width: 620px;
       box-shadow: 0 24px 80px rgba(0,0,0,0.5), 0 0 0 1px rgba(59,130,246,0.08);
       position: relative;
-      overflow: hidden;
     }
 
     .card::before {
@@ -54,7 +56,7 @@
       border-radius: 20px 20px 0 0;
     }
 
-    .header { text-align: center; margin-bottom: 40px; }
+    .header { text-align: center; margin-bottom: 26px; }
     .badge {
       display: inline-flex;
       align-items: center;
@@ -68,7 +70,7 @@
       border: 1px solid rgba(59,130,246,0.25);
       border-radius: 99px;
       padding: 4px 12px;
-      margin-bottom: 16px;
+      margin-bottom: 12px;
     }
     .badge .dot {
       width: 6px; height: 6px;
@@ -77,33 +79,174 @@
       animation: pulse 2s infinite;
     }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
     h1 {
-      font-size: 28px;
+      font-size: 26px;
       font-weight: 700;
       letter-spacing: -0.02em;
       background: linear-gradient(135deg, #e2e8f0 0%, #94a3b8 100%);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
-      background-clip: text;
-      line-height: 1.2;
+      line-height: 1.25;
+      margin-bottom: 6px;
+    }
+    .subtitle { font-size: 12.5px; color: var(--muted); }
+
+    .section-title {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #94a3b8;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .clear-link {
+      font-size: 11px;
+      color: var(--accent);
+      text-decoration: none;
+      cursor: pointer;
+      text-transform: none;
+      font-weight: 500;
+    }
+    .clear-link:hover { text-decoration: underline; }
+
+    /* City Search & Chip List */
+    .form-group { margin-bottom: 20px; position: relative; }
+    .search-wrapper { position: relative; }
+    .search-input {
+      width: 100%;
+      padding: 12px 14px 12px 38px;
+      font-size: 14px;
+      font-family: inherit;
+      color: #fff;
+      background: #0d1525;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .search-input:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
+    }
+    .search-icon {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 14px;
+      color: var(--muted);
+      pointer-events: none;
+    }
+
+    .autocomplete-list {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0; right: 0;
+      background: #111827;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      max-height: 220px;
+      overflow-y: auto;
+      z-index: 100;
+      display: none;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.6);
+    }
+    .autocomplete-item {
+      padding: 10px 14px;
+      font-size: 13px;
+      color: #e2e8f0;
+      cursor: pointer;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .autocomplete-item:hover { background: rgba(59,130,246,0.15); }
+    .autocomplete-item .state-tag { font-size: 11px; color: var(--muted); }
+
+    .chips-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 10px;
+      max-height: 120px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      color: #93c5fd;
+      background: var(--chip-bg);
+      border: 1px solid var(--chip-border);
+      border-radius: 8px;
+      padding: 5px 10px;
+      user-select: none;
+    }
+    .chip .chip-remove {
+      cursor: pointer;
+      color: #60a5fa;
+      font-weight: 700;
+      font-size: 13px;
+      line-height: 1;
+      padding: 0 2px;
+      border-radius: 4px;
+    }
+    .chip .chip-remove:hover { color: #f87171; background: rgba(239,68,68,0.15); }
+
+    /* Date Range Picker */
+    .date-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
       margin-bottom: 8px;
     }
-    .subtitle { font-size: 13px; color: var(--muted); }
+    .date-field { display: flex; flex-direction: column; gap: 4px; }
+    .date-label { font-size: 11px; color: var(--muted); font-weight: 500; }
+    .date-input {
+      width: 100%;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-family: inherit;
+      color: #fff;
+      background: #0d1525;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      outline: none;
+      color-scheme: dark;
+    }
+    .date-input:focus { border-color: var(--border-focus); }
 
-    .sources { display: flex; gap: 8px; justify-content: center; margin-bottom: 32px; }
-    .source-chip {
+    .presets-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 22px;
+    }
+    .preset-btn {
       font-size: 11px;
       font-weight: 500;
       color: #94a3b8;
       background: rgba(255,255,255,0.04);
-      border: 1px solid rgba(255,255,255,0.08);
+      border: 1px solid var(--border);
       border-radius: 6px;
-      padding: 4px 10px;
+      padding: 4px 8px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
     }
+    .preset-btn:hover { background: rgba(59,130,246,0.15); color: #93c5fd; }
 
+    /* Submit Button */
     #btn-get {
       width: 100%;
-      padding: 16px;
+      padding: 15px;
       font-size: 15px;
       font-weight: 600;
       letter-spacing: 0.04em;
@@ -122,6 +265,7 @@
     #btn-get:hover:not(:disabled) { opacity: 0.92; transform: translateY(-1px); box-shadow: 0 8px 28px rgba(59,130,246,0.45); }
     #btn-get:active:not(:disabled) { transform: translateY(0); }
     #btn-get:disabled { opacity: 0.5; cursor: not-allowed; }
+
     .spinner {
       width: 16px; height: 16px;
       border: 2px solid rgba(255,255,255,0.3);
@@ -132,8 +276,9 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    #progress-panel { margin-top: 24px; display: none; }
-    .panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    /* Progress & Logs */
+    #progress-panel { margin-top: 20px; display: none; }
+    .panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
     .panel-label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
     .step-counter { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
@@ -141,12 +286,12 @@
       background: var(--log-bg);
       border: 1px solid var(--border);
       border-radius: 10px;
-      padding: 14px 16px;
-      height: 220px;
+      padding: 12px 14px;
+      height: 200px;
       overflow-y: auto;
-      font-size: 12.5px;
+      font-size: 12px;
       font-family: 'Inter', monospace;
-      line-height: 1.7;
+      line-height: 1.65;
       scroll-behavior: smooth;
     }
     .log-line { display: flex; align-items: flex-start; gap: 8px; animation: fadeIn 0.2s ease; }
@@ -158,24 +303,25 @@
     .log-line.info .log-msg { color: #60a5fa; }
     .log-line.warn .log-msg { color: var(--warn); }
 
-    #download-section { display: none; margin-top: 24px; text-align: center; }
+    /* Download section */
+    #download-section { display: none; margin-top: 20px; text-align: center; }
     .result-badge {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
-      font-size: 13px;
+      gap: 6px;
+      font-size: 12.5px;
       font-weight: 600;
       color: var(--success);
       background: rgba(34,197,94,0.1);
       border: 1px solid rgba(34,197,94,0.25);
       border-radius: 99px;
-      padding: 6px 16px;
-      margin-bottom: 16px;
+      padding: 5px 14px;
+      margin-bottom: 12px;
     }
     #btn-download {
       width: 100%;
-      padding: 15px;
-      font-size: 15px;
+      padding: 14px;
+      font-size: 14.5px;
       font-weight: 600;
       color: #fff;
       background: linear-gradient(135deg, #059669 0%, #10b981 100%);
@@ -190,97 +336,270 @@
       gap: 10px;
     }
     #btn-download:hover { opacity: 0.92; transform: translateY(-1px); }
-    .filename-label { margin-top: 10px; font-size: 12px; color: var(--muted); }
+    .filename-label { margin-top: 8px; font-size: 11.5px; color: var(--muted); }
 
     #error-section {
       display: none;
-      margin-top: 20px;
+      margin-top: 16px;
       background: rgba(239,68,68,0.08);
       border: 1px solid rgba(239,68,68,0.2);
       border-radius: 10px;
-      padding: 14px 16px;
-      font-size: 13px;
+      padding: 12px 14px;
+      font-size: 12.5px;
       color: #fca5a5;
     }
 
-    #log::-webkit-scrollbar { width: 4px; }
-    #log::-webkit-scrollbar-track { background: transparent; }
-    #log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    #log::-webkit-scrollbar, .chips-container::-webkit-scrollbar { width: 4px; }
+    #log::-webkit-scrollbar-thumb, .chips-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
   </style>
 </head>
 <body>
 
 <div class="card">
   <div class="header">
-    <div class="badge"><span class="dot"></span> Maharashtra</div>
-    <h1>Daily Weather<br>Update</h1>
-    <p class="subtitle">Automated data collection from AccuWeather · Windy · IMD</p>
+    <div class="badge"><span class="dot"></span> Multi-City &amp; Multi-Day</div>
+    <h1>Weather Intelligence<br>Automation</h1>
+    <p class="subtitle">Live browser scraping · AccuWeather · Windy · IMD GIS Maps</p>
   </div>
 
-  <div class="sources">
-    <span class="source-chip">☁ AccuWeather</span>
-    <span class="source-chip">🌀 Windy</span>
-    <span class="source-chip">🇮🇳 IMD</span>
-    <span class="source-chip">📊 5 Locations</span>
+  <!-- City Search & Chip List -->
+  <div class="form-group">
+    <div class="section-title">
+      <span>Cities (<span id="city-count">5</span>)</span>
+      <span class="clear-link" onclick="clearCities()">Clear all</span>
+    </div>
+    <div class="search-wrapper">
+      <span class="search-icon">🔍</span>
+      <input
+        type="text"
+        id="city-search"
+        class="search-input"
+        placeholder="Type city name (e.g. Nashik, Bhuj, Jaipur, Pune)..."
+        autocomplete="off"
+      />
+      <div id="autocomplete-list" class="autocomplete-list"></div>
+    </div>
+    <div class="chips-container" id="chips-container"></div>
   </div>
 
+  <!-- Date Range Selection -->
+  <div class="form-group">
+    <div class="section-title">
+      <span>Forecast Date Range</span>
+      <span id="range-label" style="font-size:11px; color:#60a5fa;">1 Day</span>
+    </div>
+    <div class="date-row">
+      <div class="date-field">
+        <label class="date-label" for="start-date">From Date</label>
+        <input type="date" id="start-date" class="date-input" />
+      </div>
+      <div class="date-field">
+        <label class="date-label" for="end-date">To Date</label>
+        <input type="date" id="end-date" class="date-input" />
+      </div>
+    </div>
+    <div class="presets-row">
+      <button type="button" class="preset-btn" onclick="setPreset(1)">Today</button>
+      <button type="button" class="preset-btn" onclick="setPreset(2)">Today + 1</button>
+      <button type="button" class="preset-btn" onclick="setPreset(3)">Next 3 Days</button>
+      <button type="button" class="preset-btn" onclick="setPreset(5)">5-Day Outlook</button>
+    </div>
+  </div>
+
+  <!-- Action Button -->
   <button id="btn-get" onclick="startJob()">
     <span class="spinner" id="spinner"></span>
     <span id="btn-label">GET DATA</span>
   </button>
 
+  <!-- Progress Logs -->
   <div id="progress-panel">
     <div class="panel-header">
-      <span class="panel-label">Progress</span>
+      <span class="panel-label">Live Automation Feed</span>
       <span class="step-counter" id="step-counter">—</span>
     </div>
     <div id="log"></div>
   </div>
 
+  <!-- Download Section -->
   <div id="download-section">
-    <div class="result-badge">✓ Report Ready</div>
+    <div class="result-badge">✓ PowerPoint Ready</div>
     <button id="btn-download" onclick="downloadFile()">
-      ⬇ DOWNLOAD POWERPOINT
+      ⬇ DOWNLOAD POWERPOINT (.PPTX)
     </button>
     <div class="filename-label" id="filename-label"></div>
   </div>
 
+  <!-- Error Section -->
   <div id="error-section">
     ⚠ <span id="error-msg"></span>
   </div>
 </div>
 
 <script>
+  let selectedCities = [
+    { name: "Nashik", state: "Maharashtra", lat: 19.9975, lon: 73.7898 },
+    { name: "Mumbai", state: "Maharashtra", lat: 19.0760, lon: 72.8777 },
+    { name: "Pune", state: "Maharashtra", lat: 18.5204, lon: 73.8567 },
+    { name: "Ahmednagar", state: "Maharashtra", lat: 19.0948, lon: 74.7479 },
+    { name: "Aurangabad", state: "Maharashtra", lat: 19.8762, lon: 75.3433 },
+  ];
+
   let evtSource = null;
   let stepCount = 0;
   let currentFilename = null;
+  let searchDebounceTimer = null;
 
-  const log         = document.getElementById('log');
-  const panel       = document.getElementById('progress-panel');
-  const dlSection   = document.getElementById('download-section');
-  const errSection  = document.getElementById('error-section');
-  const spinner     = document.getElementById('spinner');
-  const btnGet      = document.getElementById('btn-get');
-  const btnLabel    = document.getElementById('btn-label');
-  const stepCounter = document.getElementById('step-counter');
-  const fnLabel     = document.getElementById('filename-label');
-  const errMsg      = document.getElementById('error-msg');
+  const searchInput    = document.getElementById('city-search');
+  const autoList       = document.getElementById('autocomplete-list');
+  const chipsContainer = document.getElementById('chips-container');
+  const cityCountEl    = document.getElementById('city-count');
+  const startDateInput = document.getElementById('start-date');
+  const endDateInput   = document.getElementById('end-date');
+  const rangeLabel     = document.getElementById('range-label');
+  const log            = document.getElementById('log');
+  const panel          = document.getElementById('progress-panel');
+  const dlSection      = document.getElementById('download-section');
+  const errSection     = document.getElementById('error-section');
+  const spinner        = document.getElementById('spinner');
+  const btnGet         = document.getElementById('btn-get');
+  const btnLabel       = document.getElementById('btn-label');
+  const stepCounter    = document.getElementById('step-counter');
+  const fnLabel        = document.getElementById('filename-label');
+  const errMsg         = document.getElementById('error-msg');
 
   const API_BASE = window.location.protocol.startsWith('http') ? '' : 'http://127.0.0.1:5000';
 
-  // Check initial status on page load (if report already generated)
-  window.addEventListener('DOMContentLoaded', () => {
-    fetch(`${API_BASE}/status`)
-      .then(r => r.json())
-      .then(s => {
-        if (s.ppt_path && !s.running) {
-          const fname = s.ppt_path.split(/[\\\/]/).pop();
-          jobDone(fname);
-        }
-      })
-      .catch(() => {});
+  // Initialize dates
+  function initDates() {
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    const todayStr = `${yyyy}-${mm}-${dd}`;
+    startDateInput.value = todayStr;
+    endDateInput.value   = todayStr;
+    updateRangeLabel();
+  }
+
+  function setPreset(days) {
+    const start = new Date(startDateInput.value || new Date());
+    const end = new Date(start);
+    end.setDate(end.getDate() + (days - 1));
+    const yyyy = end.getFullYear();
+    const mm = String(end.getMonth() + 1).padStart(2, '0');
+    const dd = String(end.getDate()).padStart(2, '0');
+    endDateInput.value = `${yyyy}-${mm}-${dd}`;
+    updateRangeLabel();
+  }
+
+  function updateRangeLabel() {
+    const s = new Date(startDateInput.value);
+    const e = new Date(endDateInput.value);
+    if (!isNaN(s) && !isNaN(e)) {
+      const diffTime = e - s;
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+      rangeLabel.textContent = diffDays > 0 ? `${diffDays} Day${diffDays > 1 ? 's' : ''}` : 'Invalid range';
+    }
+  }
+
+  startDateInput.addEventListener('change', () => {
+    if (new Date(endDateInput.value) < new Date(startDateInput.value)) {
+      endDateInput.value = startDateInput.value;
+    }
+    updateRangeLabel();
+  });
+  endDateInput.addEventListener('change', updateRangeLabel);
+
+  // Render City Chips
+  function renderChips() {
+    chipsContainer.innerHTML = '';
+    selectedCities.forEach((city, idx) => {
+      const chip = document.createElement('div');
+      chip.className = 'chip';
+      chip.innerHTML = `
+        <span>${escHtml(city.name)} <span style="font-size:10px; color:#60a5fa;">(${escHtml(city.state)})</span></span>
+        <span class="chip-remove" onclick="removeCity(${idx})">✕</span>
+      `;
+      chipsContainer.appendChild(chip);
+    });
+    cityCountEl.textContent = selectedCities.length;
+  }
+
+  function removeCity(index) {
+    selectedCities.splice(index, 1);
+    renderChips();
+  }
+
+  function clearCities() {
+    selectedCities = [];
+    renderChips();
+  }
+
+  // City Search Autocomplete via Open-Meteo Geocoding
+  searchInput.addEventListener('input', (e) => {
+    const q = e.target.value.trim();
+    clearTimeout(searchDebounceTimer);
+    if (q.length < 2) {
+      autoList.style.display = 'none';
+      return;
+    }
+    searchDebounceTimer = setTimeout(() => {
+      fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=8&language=en&format=json`)
+        .then(r => r.json())
+        .then(data => {
+          autoList.innerHTML = '';
+          const results = data.results || [];
+          if (results.length === 0) {
+            autoList.style.display = 'none';
+            return;
+          }
+          // Prioritize India
+          results.sort((a, b) => (b.country_code === 'IN') - (a.country_code === 'IN'));
+
+          results.forEach(item => {
+            const row = document.createElement('div');
+            row.className = 'autocomplete-item';
+            const state = item.admin1 || item.country || '';
+            row.innerHTML = `
+              <span><strong>${escHtml(item.name)}</strong>, ${escHtml(state)}</span>
+              <span class="state-tag">${item.country_code || ''}</span>
+            `;
+            row.onclick = () => {
+              addCity({
+                name: item.name,
+                state: item.admin1 || 'India',
+                lat: item.latitude,
+                lon: item.longitude,
+                accu_query: `${item.name} ${item.admin1 || ''} India`.trim()
+              });
+              searchInput.value = '';
+              autoList.style.display = 'none';
+            };
+            autoList.appendChild(row);
+          });
+          autoList.style.display = 'block';
+        })
+        .catch(() => {
+          autoList.style.display = 'none';
+        });
+    }, 280);
   });
 
+  document.addEventListener('click', (e) => {
+    if (!autoList.contains(e.target) && e.target !== searchInput) {
+      autoList.style.display = 'none';
+    }
+  });
+
+  function addCity(city) {
+    if (!selectedCities.some(c => c.name.toLowerCase() === city.name.toLowerCase() && c.state === city.state)) {
+      selectedCities.push(city);
+      renderChips();
+    }
+  }
+
+  // Job Runner
   function addLog(text, cls = '') {
     stepCount++;
     stepCounter.textContent = `Step ${stepCount}`;
@@ -297,6 +616,7 @@
   }
 
   function escHtml(s) {
+    if (typeof s !== 'string') return String(s);
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
@@ -305,12 +625,17 @@
       return 'err';
     if (msg.startsWith('DONE') || msg.includes('✓') || msg.toLowerCase().includes('complete'))
       return 'ok';
-    if (msg.toLowerCase().includes('opening') || msg.toLowerCase().includes('creating'))
+    if (msg.toLowerCase().includes('opening') || msg.toLowerCase().includes('launching') || msg.toLowerCase().includes('starting') || msg.toLowerCase().includes('generating'))
       return 'info';
     return '';
   }
 
   function startJob() {
+    if (selectedCities.length === 0) {
+      alert("Please add at least one city.");
+      return;
+    }
+
     log.innerHTML = '';
     stepCount = 0;
     stepCounter.textContent = '—';
@@ -319,22 +644,32 @@
     panel.style.display      = 'block';
     btnGet.disabled          = true;
     spinner.style.display    = 'block';
-    btnLabel.textContent     = 'Running…';
+    btnLabel.textContent     = 'Automating…';
     currentFilename          = null;
 
     if (evtSource) { evtSource.close(); evtSource = null; }
 
-    fetch(`${API_BASE}/get-data`, { method: 'POST' })
+    const payload = {
+      locations: selectedCities,
+      startDate: startDateInput.value,
+      endDate: endDateInput.value
+    };
+
+    fetch(`${API_BASE}/get-data`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
       .then(r => r.json())
       .then(data => {
         if (data.error) { showError(data.error); return; }
-        addLog('Job started…', 'info');
+        addLog('Automation engine initialized…', 'info');
         evtSource = new EventSource(`${API_BASE}/progress`);
         evtSource.onmessage = e => {
           const d = JSON.parse(e.data);
           if (d.msg) {
             const cls = classifyMsg(d.msg);
-            let display = d.msg.replace(/^DONE:.*/, 'PowerPoint saved ✓');
+            let display = d.msg.replace(/^DONE:.*/, 'PowerPoint presentation saved ✓');
             addLog(display, cls);
           }
           if (d.done) {
@@ -349,10 +684,10 @@
         };
         evtSource.onerror = () => {
           evtSource.close();
-          fetch(`${API_BASE}/status`).then(r=>r.json()).then(s => {
+          fetch(`${API_BASE}/status`).then(r => r.json()).then(s => {
             if (s.ppt_path) jobDone(s.ppt_path.split(/[\\\/]/).pop());
             else if (s.error) showError(s.error);
-            else if (!s.running) showError('Job ended unexpectedly.');
+            else if (!s.running) showError('Session closed unexpectedly.');
           });
         };
       })
@@ -366,7 +701,7 @@
     btnLabel.textContent    = 'GET DATA';
     dlSection.style.display = 'block';
     fnLabel.textContent     = filename;
-    addLog('Complete ✓', 'ok');
+    addLog('All forecasts & IMD maps compiled successfully ✓', 'ok');
   }
 
   function showError(msg) {
@@ -381,6 +716,20 @@
   function downloadFile() {
     window.location.href = `${API_BASE}/download`;
   }
+
+  window.addEventListener('DOMContentLoaded', () => {
+    initDates();
+    renderChips();
+    fetch(`${API_BASE}/status`)
+      .then(r => r.json())
+      .then(s => {
+        if (s.ppt_path && !s.running) {
+          const fname = s.ppt_path.split(/[\\\/]/).pop();
+          jobDone(fname);
+        }
+      })
+      .catch(() => {});
+  });
 </script>
 
 </body>

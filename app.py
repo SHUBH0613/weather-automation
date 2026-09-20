@@ -1,6 +1,7 @@
 """
 app.py
-Flask web server — single POST /get-data endpoint with SSE progress stream.
+Flask web server — accepts dynamic locations and date ranges, runs browser automation,
+streams live Server-Sent Events (SSE) progress, and delivers PowerPoint download.
 """
 
 import asyncio
@@ -29,15 +30,14 @@ def add_cors_headers(response):
 def get_data_options():
     return "", 204
 
-# ── Job state (simple in-memory, single-user tool) ────────────────────────────
+# ── Job state (in-memory single-user tool) ──────────────────────────────────
 _job_lock = threading.Lock()
 _job_state = {
     "running": False,
-    "messages": [],   # list of SSE messages
+    "messages": [],
     "ppt_path": None,
     "error": None,
 }
-
 
 def _reset_job():
     with _job_lock:
@@ -46,11 +46,9 @@ def _reset_job():
         _job_state["ppt_path"] = None
         _job_state["error"] = None
 
-
 def _push(msg: str):
     with _job_lock:
         _job_state["messages"].append(msg)
-
 
 def _finish(ppt_path: str = None, error: str = None):
     with _job_lock:
@@ -58,22 +56,21 @@ def _finish(ppt_path: str = None, error: str = None):
         _job_state["ppt_path"] = ppt_path
         _job_state["error"] = error
 
-
 # ── Background worker ─────────────────────────────────────────────────────────
-def _run_in_thread():
-    """Run the async automation in a dedicated thread/event-loop."""
+def _run_in_thread(locations=None, start_date=None, end_date=None):
     async def _async_job():
         async def emit(msg: str):
             _push(msg)
 
         try:
-            result = await run_automation(emit)
-            _push("Creating PowerPoint…")
-            ppt_path = generate_ppt(
-                result["date_str"],
-                result["weather_data"],
-                result["imd_image"],
+            result = await run_automation(
+                locations=locations,
+                start_date_str=start_date,
+                end_date_str=end_date,
+                emit=emit
             )
+            _push("Generating PowerPoint presentation...")
+            ppt_path = generate_ppt(result)
             _push(f"DONE:{ppt_path}")
             _finish(ppt_path=ppt_path)
         except Exception as e:
@@ -82,7 +79,6 @@ def _run_in_thread():
 
     asyncio.run(_async_job())
 
-
 INDEX_HTML_PATH = os.path.join(os.path.dirname(__file__), "index.html")
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -90,22 +86,30 @@ INDEX_HTML_PATH = os.path.join(os.path.dirname(__file__), "index.html")
 def index():
     return send_file(INDEX_HTML_PATH)
 
-
 @app.route("/get-data", methods=["POST"])
 def get_data():
     with _job_lock:
         if _job_state["running"]:
             return jsonify({"error": "Job already running"}), 429
 
+    # Parse JSON payload if sent
+    data = request.get_json(silent=True) or {}
+    locations = data.get("locations")
+    start_date = data.get("startDate")
+    end_date = data.get("endDate")
+
     _reset_job()
-    t = threading.Thread(target=_run_in_thread, daemon=True)
+    t = threading.Thread(
+        target=_run_in_thread,
+        args=(locations, start_date, end_date),
+        daemon=True
+    )
     t.start()
     return jsonify({"status": "started"})
 
-
 @app.route("/progress")
 def progress():
-    """Server-Sent Events stream — client polls this to get live status."""
+    """Server-Sent Events stream — client listens for real-time progress updates."""
     def event_stream():
         sent_count = 0
         while True:
@@ -120,7 +124,6 @@ def progress():
                 sent_count += 1
                 yield f"data: {json.dumps({'msg': m})}\n\n"
 
-            # Job finished
             if not running:
                 if ppt_path:
                     fname = os.path.basename(ppt_path)
@@ -129,21 +132,25 @@ def progress():
                     yield f"data: {json.dumps({'error': error})}\n\n"
                 return
 
-            time.sleep(0.4)
+            time.sleep(0.3)
 
-    return Response(event_stream(), mimetype="text/event-stream",
-                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
+    return Response(
+        event_stream(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
 
 @app.route("/download")
 def download():
     with _job_lock:
         ppt_path = _job_state.get("ppt_path")
     if not ppt_path or not os.path.exists(ppt_path):
-        return jsonify({"error": "No file ready"}), 404
-    return send_file(ppt_path, as_attachment=True,
-                     download_name=os.path.basename(ppt_path))
-
+        return jsonify({"error": "No report ready for download"}), 404
+    return send_file(
+        ppt_path,
+        as_attachment=True,
+        download_name=os.path.basename(ppt_path)
+    )
 
 @app.route("/status")
 def status():
@@ -151,10 +158,10 @@ def status():
         return jsonify({
             "running": _job_state["running"],
             "ppt_path": _job_state["ppt_path"],
-            "error": _job_state["error"],
+            "error": _job_state["error"]
         })
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
+    print(f"Starting server on http://0.0.0.0:{port}")
+    app.run(host="0.0.0.0", port=port, debug=False)

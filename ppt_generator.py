@@ -1,18 +1,21 @@
 """
 ppt_generator.py
-Fills weather_template.pptx matching the exact visual structure,
-Arial 14pt fonts, single-line text formatting, proper spacing without overlap,
-and dynamic date updates across all slide titles.
+Generates presentation from weather_template.pptx:
+- Title Slide with Date Range & Cities.
+- Multi-day Weather Tables: One slide per date listing all selected cities (Arial 14, no broken words, GO/LTD GO/NO GO).
+- Multi-state IMD Warning Map slides with transparent Google Map layer and official IMD Color Code Legend.
+- Clear notification when forecast exceeds IMD's 6-day horizon.
 """
 
 import copy
 import os
-from typing import Optional
+from typing import List, Dict, Any, Optional
 
 import pptx
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+from pptx.enum.shapes import MSO_SHAPE
 
 TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "template", "weather_template.pptx")
 OUTPUT_DIR = os.path.dirname(__file__)
@@ -33,22 +36,32 @@ def _fmt_num(val, unit: str = "") -> str:
         return f"{round(val, 1)}{unit}"
     return f"{val}{unit}"
 
-def _update_title_text_box(slide, new_date_str: str):
+def _update_slide_title(slide, title_text: str):
     """Update title heading without altering shape position or layout."""
     for shape in slide.shapes:
-        if shape.has_text_frame and "WX UPDATE" in shape.text_frame.text:
+        if shape.has_text_frame and ("WX UPDATE" in shape.text_frame.text or "IMD" in shape.text_frame.text):
             tf = shape.text_frame
             for para in tf.paragraphs:
-                if "WX UPDATE" in para.text:
-                    para.text = new_date_str
+                if "WX UPDATE" in para.text or "IMD" in para.text:
+                    para.text = title_text
                     if para.runs:
                         r = para.runs[0]
                         r.font.name = "Arial"
-                        r.font.size = Pt(24)
+                        r.font.size = Pt(22)
                         r.font.bold = True
                         r.font.underline = True
                         r.font.color.rgb = RGBColor(0x1B, 0x36, 0x5D)
-            break
+            return
+    # If no matching title box, create one
+    txb = slide.shapes.add_textbox(Inches(0.5), Inches(0.08), Inches(9.0), Inches(0.5))
+    p = txb.text_frame.paragraphs[0]
+    p.text = title_text
+    r = p.runs[0] if p.runs else p.add_run()
+    r.font.name = "Arial"
+    r.font.size = Pt(22)
+    r.font.bold = True
+    r.font.underline = True
+    r.font.color.rgb = RGBColor(0x1B, 0x36, 0x5D)
 
 def _fill_2line_cell(cell, top_text: str, bottom_text: str):
     """Fill a clean two-line cell (Windy on line 1, Accuwx on line 2) in Arial 14."""
@@ -120,143 +133,314 @@ def _fill_remarks_cell(cell, w_remark: str, a_remark: str):
     r1.font.bold = True
     r1.font.color.rgb = COLOR_MAP.get(a_remark, RGBColor(0x00, 0x00, 0x00))
 
-def generate_ppt(date_str: str, weather_data: list, imd_image_path: str) -> str:
-    if not os.path.exists(TEMPLATE_PATH):
-        raise FileNotFoundError(f"Template not found at {TEMPLATE_PATH}")
-
-    prs = pptx.Presentation(TEMPLATE_PATH)
-    date_label = f"WX UPDATE {date_str}"
-
-    # SLIDE 1 — Title Slide
-    slide1 = prs.slides[0]
-    _update_title_text_box(slide1, date_label)
-
-    # SLIDE 2 — Weather Table + Title
-    slide2 = prs.slides[1]
-    _update_title_text_box(slide2, date_label)
-
+def _populate_table(slide, weather_data: List[Dict[str, Any]]):
+    """Populates the 6-column table on the given slide."""
     table_shape = None
-    for shape in slide2.shapes:
+    for shape in slide.shapes:
         if shape.has_table and len(shape.table.columns) == 6:
             table_shape = shape
             break
 
-    if table_shape:
-        # Position table just below the red banner so there is ZERO overlap
-        # Banner bottom is at -104075 + 550200 = 446125 EMU
-        table_shape.top = 450000
-        tbl = table_shape.table
+    if not table_shape:
+        return
 
-        # Rebalance columns: Col 1 has 2.2 inches so AHMEDNAGAR/AURANGABAD fit on one line in Arial 14
-        column_widths = [700000, 2200000, 1250000, 1700000, 1600000, 1694025]
-        for i, w in enumerate(column_widths):
-            tbl.columns[i].width = w
+    table_shape.top = 450000
+    tbl = table_shape.table
 
-        # Format header row (Row 0)
-        for c_idx in range(6):
-            cell = tbl.cell(0, c_idx)
-            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
-            cell.margin_left = Inches(0.04)
-            cell.margin_right = Inches(0.04)
-            cell.margin_top = Inches(0.04)
-            cell.margin_bottom = Inches(0.04)
-            for p in cell.text_frame.paragraphs:
-                for r in p.runs:
-                    r.font.name = "Arial"
-                    r.font.size = Pt(14)
-                    r.font.bold = True
-                    r.font.underline = True
+    # Column widths: 0.77in, 2.42in, 1.38in, 1.87in, 1.76in, 1.86in
+    column_widths = [700000, 2200000, 1250000, 1700000, 1600000, 1694025]
+    for i, w in enumerate(column_widths):
+        tbl.columns[i].width = w
 
-        needed = 1 + len(weather_data)
-        while len(tbl.rows) < needed:
-            new_tr = copy.deepcopy(tbl._tbl.tr_lst[-1])
-            tbl._tbl.append(new_tr)
-        while len(tbl.rows) > needed:
-            tbl._tbl.remove(tbl._tbl.tr_lst[-1])
+    # Format header row (Row 0)
+    for c_idx in range(6):
+        cell = tbl.cell(0, c_idx)
+        cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+        cell.margin_left = Inches(0.04)
+        cell.margin_right = Inches(0.04)
+        cell.margin_top = Inches(0.04)
+        cell.margin_bottom = Inches(0.04)
+        for p in cell.text_frame.paragraphs:
+            for r in p.runs:
+                r.font.name = "Arial"
+                r.font.size = Pt(14)
+                r.font.bold = True
+                r.font.underline = True
 
-        for idx, item in enumerate(weather_data):
-            row = tbl.rows[idx + 1]
-            row.height = 550000
+    needed = 1 + len(weather_data)
+    while len(tbl.rows) < needed:
+        new_tr = copy.deepcopy(tbl._tbl.tr_lst[-1])
+        tbl._tbl.append(new_tr)
+    while len(tbl.rows) > needed:
+        tbl._tbl.remove(tbl._tbl.tr_lst[-1])
 
-            # Col 0: Ser No
-            c0 = row.cells[0]
-            c0.vertical_anchor = MSO_ANCHOR.MIDDLE
-            c0.margin_left = Inches(0.04)
-            c0.margin_right = Inches(0.04)
-            c0.text = ""
-            p0 = c0.text_frame.paragraphs[0]
-            r0 = p0.add_run()
-            r0.text = str(idx + 1)
-            r0.font.name = "Arial"
-            r0.font.size = Pt(14)
-            r0.font.bold = True
+    for idx, item in enumerate(weather_data):
+        row = tbl.rows[idx + 1]
+        row.height = 550000
 
-            # Col 1: Loc (all words in one line, no wrapping)
-            c1 = row.cells[1]
-            c1.vertical_anchor = MSO_ANCHOR.MIDDLE
-            c1.margin_left = Inches(0.04)
-            c1.margin_right = Inches(0.04)
-            c1.text_frame.word_wrap = False
-            c1.text = ""
-            p1 = c1.text_frame.paragraphs[0]
-            r1 = p1.add_run()
-            r1.text = item["location"].upper()
-            r1.font.name = "Arial"
-            r1.font.size = Pt(14)
-            r1.font.bold = True
+        # Col 0: Ser No
+        c0 = row.cells[0]
+        c0.vertical_anchor = MSO_ANCHOR.MIDDLE
+        c0.margin_left = Inches(0.04)
+        c0.margin_right = Inches(0.04)
+        c0.text = ""
+        p0 = c0.text_frame.paragraphs[0]
+        r0 = p0.add_run()
+        r0.text = str(idx + 1)
+        r0.font.name = "Arial"
+        r0.font.size = Pt(14)
+        r0.font.bold = True
 
-            # Col 2: Wx App (Windy on line 1, Accuwx on line 2)
-            _fill_2line_cell(row.cells[2], "Windy", "Accuwx")
+        # Col 1: Loc (all words in one line, no wrapping)
+        c1 = row.cells[1]
+        c1.vertical_anchor = MSO_ANCHOR.MIDDLE
+        c1.margin_left = Inches(0.04)
+        c1.margin_right = Inches(0.04)
+        c1.text_frame.word_wrap = False
+        c1.text = ""
+        p1 = c1.text_frame.paragraphs[0]
+        r1 = p1.add_run()
+        r1.text = item["location"].upper()
+        r1.font.name = "Arial"
+        r1.font.size = Pt(14)
+        r1.font.bold = True
 
-            # Col 3: Forecast Rain mm/%
-            w_rain = _fmt_num(item.get("windy_rain"), "mm")
-            if item.get("accu_rain_prob") is not None:
-                a_rain = f"{int(item['accu_rain_prob'])}%"
-            elif item.get("accu_rain_mm") is not None:
-                a_rain = f"{item['accu_rain_mm']}mm"
-            else:
-                a_rain = "N/A"
-            _fill_2line_cell(row.cells[3], w_rain, a_rain)
+        # Col 2: Wx App (Windy on line 1, Accuwx on line 2)
+        _fill_2line_cell(row.cells[2], "Windy", "Accuwx")
 
-            # Col 4: Cloud cover %
-            w_cloud = _fmt_num(item.get("windy_cloud"), "%")
-            a_cloud = _fmt_num(item.get("accu_cloud"), "%")
-            _fill_2line_cell(row.cells[4], w_cloud, a_cloud)
+        # Col 3: Forecast Rain mm/%
+        w_rain = _fmt_num(item.get("windy_rain"), "mm")
+        if item.get("accu_rain_prob") is not None:
+            a_rain = f"{int(item['accu_rain_prob'])}%"
+        elif item.get("accu_rain_mm") is not None:
+            a_rain = f"{item['accu_rain_mm']}mm"
+        else:
+            a_rain = "N/A"
+        _fill_2line_cell(row.cells[3], w_rain, a_rain)
 
-            # Col 5: Remarks (Color-coded)
-            w_rmk = item.get("windy_remark", "DATA UNAVAILABLE")
-            a_rmk = item.get("accu_remark", "DATA UNAVAILABLE")
-            _fill_remarks_cell(row.cells[5], w_rmk, a_rmk)
+        # Col 4: Cloud cover %
+        w_cloud = _fmt_num(item.get("windy_cloud"), "%")
+        a_cloud = _fmt_num(item.get("accu_cloud"), "%")
+        _fill_2line_cell(row.cells[4], w_cloud, a_cloud)
 
-    # SLIDE 3 — IMD Map Replacement
-    slide3 = prs.slides[2]
-    _update_title_text_box(slide3, date_label)
+        # Col 5: Remarks (Color-coded)
+        w_rmk = item.get("windy_remark", "DATA UNAVAILABLE")
+        a_rmk = item.get("accu_remark", "DATA UNAVAILABLE")
+        _fill_remarks_cell(row.cells[5], w_rmk, a_rmk)
 
-    pic_shape = None
-    for shape in slide3.shapes:
-        if shape.shape_type == pptx.enum.shapes.MSO_SHAPE_TYPE.PICTURE:
-            pic_shape = shape
-            break
+def _add_imd_legend(slide):
+    """Adds the official IMD Color Code Legend panel on the right side of the slide."""
+    legend_shape = slide.shapes.add_shape(
+        MSO_SHAPE.ROUNDED_RECTANGLE,
+        Inches(6.6), Inches(0.75), Inches(3.1), Inches(4.65)
+    )
+    legend_shape.fill.solid()
+    legend_shape.fill.fore_color.rgb = RGBColor(0xF8, 0xF9, 0xFA)
+    legend_shape.line.color.rgb = RGBColor(0xCB, 0xD5, 0xE1)
 
-    if imd_image_path and os.path.exists(imd_image_path) and os.path.getsize(imd_image_path) > 5000:
-        if pic_shape:
-            left, top, width, height = pic_shape.left, pic_shape.top, pic_shape.width, pic_shape.height
-            sp_tree = slide3.shapes._spTree
-            sp_tree.remove(pic_shape._element)
-            slide3.shapes.add_picture(imd_image_path, left, top, width, height)
+    ltf = legend_shape.text_frame
+    ltf.word_wrap = True
+    ltf.margin_left = Inches(0.12)
+    ltf.margin_right = Inches(0.12)
+    ltf.margin_top = Inches(0.12)
+    ltf.margin_bottom = Inches(0.12)
+
+    lp0 = ltf.paragraphs[0]
+    lp0.text = "IMD WARNING LEGEND"
+    lp0.font.name = "Arial"
+    lp0.font.size = Pt(13)
+    lp0.font.bold = True
+    lp0.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
+    lp0.alignment = PP_ALIGN.CENTER
+    lp0.space_after = Pt(6)
+
+    legend_items = [
+        ("GREEN", "NO WARNING", "No Action required.\nNormal conditions.", RGBColor(0x00, 0xB0, 0x50)),
+        ("YELLOW", "WATCH", "Be Updated.\nWeather alert watch.", RGBColor(0xD9, 0x77, 0x06)),
+        ("ORANGE", "ALERT", "Be Prepared.\nSevere weather expected.", RGBColor(0xEA, 0x58, 0x0C)),
+        ("RED", "WARNING", "Take Action.\nExtreme weather hazard.", RGBColor(0xDC, 0x26, 0x26)),
+    ]
+
+    for code, title, desc, col in legend_items:
+        p_title = ltf.add_paragraph()
+        p_title.text = f"■  {title} ({code})"
+        p_title.font.name = "Arial"
+        p_title.font.size = Pt(11)
+        p_title.font.bold = True
+        p_title.font.color.rgb = col
+        p_title.space_before = Pt(4)
+
+        p_desc = ltf.add_paragraph()
+        p_desc.text = desc
+        p_desc.font.name = "Arial"
+        p_desc.font.size = Pt(9)
+        p_desc.font.color.rgb = RGBColor(0x47, 0x55, 0x69)
+        p_desc.space_after = Pt(2)
+
+    p_rule = ltf.add_paragraph()
+    p_rule.text = "CRITERIA: Green=GO | Yellow=LTD GO | Orange/Red=NO GO"
+    p_rule.font.name = "Arial"
+    p_rule.font.size = Pt(8.5)
+    p_rule.font.bold = True
+    p_rule.font.color.rgb = RGBColor(0x33, 0x41, 0x55)
+    p_rule.space_before = Pt(6)
+    p_rule.alignment = PP_ALIGN.CENTER
+
+    p_src = ltf.add_paragraph()
+    p_src.text = "Source: IMD District GIS Warning Portal"
+    p_src.font.name = "Arial"
+    p_src.font.size = Pt(8)
+    p_src.font.italic = True
+    p_src.font.color.rgb = RGBColor(0x94, 0xA3, 0xB8)
+    p_src.space_before = Pt(4)
+    p_src.alignment = PP_ALIGN.CENTER
+
+def _create_imd_slide(prs, template_imd_slide, state_name: str, date_str: str, image_path: Optional[str], available: bool):
+    """Creates an IMD slide for a specific state and date."""
+    slide_layout = template_imd_slide.slide_layout
+    new_slide = prs.slides.add_slide(slide_layout)
+
+    # Copy shapes from template_imd_slide (banner, etc.)
+    for shp in template_imd_slide.shapes:
+        # Avoid copying old picture or city text boxes from template
+        if shp.shape_type == pptx.enum.shapes.MSO_SHAPE_TYPE.PICTURE:
+            continue
+        if shp.has_text_frame and ("WX UPDATE" in shp.text_frame.text or "NASHIK" in shp.text_frame.text or "PUNE" in shp.text_frame.text or "MUMBAI" in shp.text_frame.text or "AURANGABAD" in shp.text_frame.text or "AHMEDNAGAR" in shp.text_frame.text):
+            continue
+        new_slide.shapes._spTree.append(copy.deepcopy(shp._element))
+
+    # Add Title Box
+    title_text = f"IMD DISTRICT-WISE WARNING — {state_name.upper()} ({date_str})"
+    _update_slide_title(new_slide, title_text)
+
+    # Place Map image or "DATA NOT AVAILABLE" message
+    if available and image_path and os.path.exists(image_path) and os.path.getsize(image_path) > 5000:
+        new_slide.shapes.add_picture(
+            image_path,
+            Inches(0.4), Inches(0.75),
+            width=Inches(6.0), height=Inches(4.65)
+        )
     else:
-        if pic_shape:
-            left, top, width, height = pic_shape.left, pic_shape.top, pic_shape.width, pic_shape.height
-            sp_tree = slide3.shapes._spTree
-            sp_tree.remove(pic_shape._element)
-            txb = slide3.shapes.add_textbox(left, top, width, height)
-            tf = txb.text_frame
-            tf.text = "IMD DATA UNAVAILABLE"
-            tf.paragraphs[0].runs[0].font.size = Pt(28)
-            tf.paragraphs[0].runs[0].font.bold = True
-            tf.paragraphs[0].runs[0].font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
+        # Message box when IMD data exceeds horizon or unavailable
+        box = new_slide.shapes.add_shape(
+            MSO_SHAPE.ROUNDED_RECTANGLE,
+            Inches(0.4), Inches(0.75), Inches(6.0), Inches(4.65)
+        )
+        box.fill.solid()
+        box.fill.fore_color.rgb = RGBColor(0xFE, 0xF2, 0xF2)
+        box.line.color.rgb = RGBColor(0xFE, 0xCA, 0xCA)
+        btf = box.text_frame
+        btf.vertical_anchor = MSO_ANCHOR.MIDDLE
+        btf.word_wrap = True
+        bp0 = btf.paragraphs[0]
+        bp0.text = "DATA NOT AVAILABLE ON IMD WEBSITE"
+        bp0.font.name = "Arial"
+        bp0.font.size = Pt(22)
+        bp0.font.bold = True
+        bp0.font.color.rgb = RGBColor(0xDC, 0x26, 0x26)
+        bp0.alignment = PP_ALIGN.CENTER
 
-    out_name = f"WX UPDATE {date_str}.pptx"
+        bp1 = btf.add_paragraph()
+        bp1.text = "(Exceeds 6-day forecast horizon)\nIMD provides daily district-wise GIS warnings up to 6 days ahead."
+        bp1.font.name = "Arial"
+        bp1.font.size = Pt(13)
+        bp1.font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
+        bp1.alignment = PP_ALIGN.CENTER
+        bp1.space_before = Pt(12)
+
+    # Add official IMD Legend
+    _add_imd_legend(new_slide)
+
+
+def generate_ppt(job_result: Dict[str, Any]) -> str:
+    """
+    Main PPT generation entry point.
+    job_result format:
+    {
+        "date_range_str": "21 SEP 2026 - 23 SEP 2026",
+        "dates": [
+            {
+                "date_str": "21 SEP 2026",
+                "weather_data": [ ... ],
+                "imd_maps": [
+                    {"state": "Maharashtra", "image_path": "...", "available": True}, ...
+                ]
+            }, ...
+        ],
+        "locations": ["NASHIK", "BHUJ", ...]
+    }
+    """
+    if not os.path.exists(TEMPLATE_PATH):
+        raise FileNotFoundError(f"Template not found at {TEMPLATE_PATH}")
+
+    prs = pptx.Presentation(TEMPLATE_PATH)
+    date_range_str = job_result.get("date_range_str", "")
+    dates_list = job_result.get("dates", [])
+    loc_names = job_result.get("locations", [])
+
+    # Template has 3 slides:
+    # Slide 0: Title
+    # Slide 1: Weather Table
+    # Slide 2: IMD Map
+    template_title_slide = prs.slides[0]
+    template_table_slide = prs.slides[1]
+    template_imd_slide = prs.slides[2]
+
+    # 1. Update Title Slide (Slide 0)
+    title_label = f"WX UPDATE {date_range_str}" if date_range_str else "WX UPDATE"
+    _update_slide_title(template_title_slide, title_label)
+
+    # Add subtitle with list of locations to Title Slide
+    if loc_names:
+        loc_str = "Locations: " + ", ".join(loc_names)
+        sub_box = template_title_slide.shapes.add_textbox(Inches(0.5), Inches(4.8), Inches(9.0), Inches(0.4))
+        sub_p = sub_box.text_frame.paragraphs[0]
+        sub_p.text = loc_str
+        sub_p.font.name = "Arial"
+        sub_p.font.size = Pt(12)
+        sub_p.font.italic = True
+        sub_p.font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
+
+    # 2. Weather Table Slides
+    # For each date, create/populate table slide
+    table_slides = []
+    for d_idx, day_info in enumerate(dates_list):
+        d_str = day_info["date_str"]
+        w_data = day_info["weather_data"]
+
+        if d_idx == 0:
+            # Use template_table_slide for first date
+            curr_slide = template_table_slide
+        else:
+            # Duplicate template_table_slide for subsequent dates
+            slide_layout = template_table_slide.slide_layout
+            curr_slide = prs.slides.add_slide(slide_layout)
+            for shp in template_table_slide.shapes:
+                curr_slide.shapes._spTree.append(copy.deepcopy(shp._element))
+
+        _update_slide_title(curr_slide, f"WX UPDATE {d_str}")
+        _populate_table(curr_slide, w_data)
+        table_slides.append(curr_slide)
+
+    # 3. IMD Map Slides
+    # Remove original template_imd_slide at the end, replacing with dynamic ones
+    created_imd_slides = []
+    for day_info in dates_list:
+        d_str = day_info["date_str"]
+        for imd_item in day_info.get("imd_maps", []):
+            st_name = imd_item["state"]
+            img_p = imd_item.get("image_path")
+            is_avail = imd_item.get("available", True)
+            _create_imd_slide(prs, template_imd_slide, st_name, d_str, img_p, is_avail)
+
+    # Now remove template_imd_slide (slide index 2 in original) so there are no orphan template slides
+    slide_id_list = prs.slides._sldIdLst
+    rId = slide_id_list[2].rId
+    prs.part.drop_rel(rId)
+    del slide_id_list[2]
+
+    out_name = f"WX UPDATE {date_range_str}.pptx".replace(" - ", "_TO_").replace(" ", "_")
     out_path = os.path.join(OUTPUT_DIR, out_name)
     prs.save(out_path)
     return out_path
+
