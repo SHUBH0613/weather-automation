@@ -9,10 +9,12 @@ import asyncio
 import json
 import os
 import re
+import urllib.request
 from datetime import datetime, timedelta, date
 from typing import List, Dict, Any, Callable, Optional
 
 import pytz
+import requests
 from playwright.async_api import async_playwright, Page, BrowserContext
 from bs4 import BeautifulSoup
 
@@ -134,9 +136,13 @@ def fetch_open_meteo_for_location(
             f"&daily=precipitation_sum,precipitation_probability_max,cloud_cover_mean"
             f"&timezone=Asia%2FKolkata"
         )
-        req = urllib.request.Request(url, headers={"User-Agent": "WeatherAutomation/2.0 (Mozilla/5.0)"})
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        try:
+            res = requests.get(url, timeout=10, headers={"User-Agent": "WeatherAutomation/2.0"})
+            data = res.json()
+        except Exception:
+            req = urllib.request.Request(url, headers={"User-Agent": "WeatherAutomation/2.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
 
         daily = data.get("daily", {})
         times = daily.get("time", [])
@@ -144,9 +150,15 @@ def fetch_open_meteo_for_location(
         probs = daily.get("precipitation_probability_max", [])
         clouds = daily.get("cloud_cover_mean", [])
 
+        # Build mapping of 'YYYY-MM-DD' -> date object in target_dates
+        date_map = {}
+        for d in target_dates:
+            key = d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)
+            date_map[key] = d
+
         for i, t_str in enumerate(times):
-            t_date = datetime.strptime(t_str, "%Y-%m-%d").date()
-            if t_date in results:
+            if t_str in date_map:
+                actual_date = date_map[t_str]
                 p_sum = float(precips[i]) if i < len(precips) and precips[i] is not None else 0.0
                 p_prob = float(probs[i]) if i < len(probs) and probs[i] is not None else None
                 c_mean = float(clouds[i]) if i < len(clouds) and clouds[i] is not None else None
@@ -155,14 +167,14 @@ def fetch_open_meteo_for_location(
                 c_stat = classify_cloud(c_mean)
                 remark = decide_status(r_stat, c_stat)
 
-                results[t_date] = {
+                results[actual_date] = {
                     "rain_prob": p_prob,
                     "rain_mm": p_sum,
                     "cloud": c_mean,
                     "remark": remark
                 }
     except Exception as e:
-        print(f"Open-Meteo fallback note ({lat}, {lon}): {e}")
+        print(f"Open-Meteo fallback error ({lat}, {lon}): {e}")
 
     return results
 
