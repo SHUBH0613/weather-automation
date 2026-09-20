@@ -122,27 +122,61 @@ def parse_date_str(d_str: Optional[str], fallback: date) -> date:
             pass
     return fallback
 
-# ── AccuWeather URL Resolver & Scraper ──────────────────────────────────────
+# ── AccuWeather Curated City Mappings & URL Resolver ─────────────────────────
+KNOWN_ACCU_LOCATIONS = {
+    "nashik": "https://www.accuweather.com/en/in/nashik/189304/daily-weather-forecast/189304",
+    "mumbai": "https://www.accuweather.com/en/in/mumbai/204842/daily-weather-forecast/204842",
+    "pune": "https://www.accuweather.com/en/in/pune/204848/daily-weather-forecast/204848",
+    "ahmednagar": "https://www.accuweather.com/en/in/ahilyanagar/8-189314_1_al/daily-weather-forecast/8-189314_1_al",
+    "ahilyanagar": "https://www.accuweather.com/en/in/ahilyanagar/8-189314_1_al/daily-weather-forecast/8-189314_1_al",
+    "aurangabad": "https://www.accuweather.com/en/in/chhatrapati-sambhajinagar/189320/daily-weather-forecast/189320",
+    "chhatrapati sambhajinagar": "https://www.accuweather.com/en/in/chhatrapati-sambhajinagar/189320/daily-weather-forecast/189320",
+    "nagpur": "https://www.accuweather.com/en/in/nagpur/204844/daily-weather-forecast/204844",
+    "thane": "https://www.accuweather.com/en/in/thane/189308/daily-weather-forecast/189308",
+    "solapur": "https://www.accuweather.com/en/in/solapur/189324/daily-weather-forecast/189324",
+    "kolhapur": "https://www.accuweather.com/en/in/kolhapur/189328/daily-weather-forecast/189328",
+    "delhi": "https://www.accuweather.com/en/in/delhi/202396/daily-weather-forecast/202396",
+    "new delhi": "https://www.accuweather.com/en/in/delhi/202396/daily-weather-forecast/202396",
+    "bengaluru": "https://www.accuweather.com/en/in/bengaluru/204108/daily-weather-forecast/204108",
+    "bangalore": "https://www.accuweather.com/en/in/bengaluru/204108/daily-weather-forecast/204108",
+    "hyderabad": "https://www.accuweather.com/en/in/hyderabad/202190/daily-weather-forecast/202190",
+    "chennai": "https://www.accuweather.com/en/in/chennai/206671/daily-weather-forecast/206671",
+    "ahmedabad": "https://www.accuweather.com/en/in/ahmedabad/202438/daily-weather-forecast/202438",
+    "jaipur": "https://www.accuweather.com/en/in/jaipur/205617/daily-weather-forecast/205617",
+}
+
 def get_accu_city_url(loc: Dict[str, Any]) -> str:
     if loc.get("accu_url"):
         return loc["accu_url"]
-    name = loc["name"]
+    name = loc.get("name", "").strip()
+    norm = re.sub(r'[^a-z0-9 ]', '', name.lower()).strip()
+    if norm in KNOWN_ACCU_LOCATIONS:
+        return KNOWN_ACCU_LOCATIONS[norm]
+    for k, v in KNOWN_ACCU_LOCATIONS.items():
+        if k in norm or norm in k:
+            return v
+
     state = loc.get("state", "India")
-    query = loc.get("accu_query", f"{name} {state} India")
-    search_url = f"https://www.accuweather.com/en/search-locations?query={query}"
-    try:
-        r = cffi_requests.get(search_url, impersonate="chrome124", timeout=12)
-        if r.status_code == 200:
-            soup = BeautifulSoup(r.text, "html.parser")
-            loc_list = soup.find(class_=lambda c: c and "locations-list" in c)
-            if loc_list:
-                first_a = loc_list.find("a")
-                if first_a and first_a.get("href"):
-                    redir = "https://www.accuweather.com" + first_a.get("href")
-                    r2 = cffi_requests.get(redir, impersonate="chrome124", timeout=12)
-                    return r2.url
-    except Exception:
-        pass
+    queries = [
+        f"{name} {state} India",
+        f"{name} India",
+        f"{name}"
+    ]
+    for q in queries:
+        search_url = f"https://www.accuweather.com/en/search-locations?query={q}"
+        try:
+            r = cffi_requests.get(search_url, impersonate="chrome124", timeout=12)
+            if r.status_code == 200:
+                soup = BeautifulSoup(r.text, "html.parser")
+                loc_list = soup.find(class_=lambda c: c and "locations-list" in c)
+                if loc_list:
+                    first_a = loc_list.find("a")
+                    if first_a and first_a.get("href"):
+                        redir = "https://www.accuweather.com" + first_a.get("href")
+                        r2 = cffi_requests.get(redir, impersonate="chrome124", timeout=12)
+                        return r2.url
+        except Exception:
+            pass
     return ""
 
 async def fetch_accuweather_for_location(
@@ -299,8 +333,11 @@ async def fetch_windy_for_location(
     url = f"https://www.windy.com/{lat}/{lon}?clouds,{lat},{lon},11"
 
     try:
-        await page.goto(url, timeout=25000, wait_until="domcontentloaded")
-        await page.wait_for_timeout(4000)
+        await page.goto(url, timeout=20000, wait_until="commit")
+        try:
+            await page.wait_for_selector(".forecast-table__table", timeout=12000)
+        except Exception:
+            await page.wait_for_timeout(4000)
 
         table_data = await page.evaluate(r'''async (coord) => {
             const table = document.querySelector('.forecast-table__table');
