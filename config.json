@@ -1,0 +1,40 @@
+{
+  "timezone": "Asia/Kolkata",
+  "locations": [
+    {
+      "name": "Nashik",
+      "lat": 19.9975,
+      "lon": 73.7898,
+      "accu_query": "Nashik Maharashtra India",
+      "accu_url": "https://www.accuweather.com/en/in/nashik/189304/weather-today/189304"
+    },
+    {
+      "name": "Mumbai",
+      "lat": 19.0760,
+      "lon": 72.8777,
+      "accu_query": "Mumbai Maharashtra India",
+      "accu_url": "https://www.accuweather.com/en/in/mumbai/204842/weather-today/204842"
+    },
+    {
+      "name": "Pune",
+      "lat": 18.5204,
+      "lon": 73.8567,
+      "accu_query": "Pune Maharashtra India",
+      "accu_url": "https://www.accuweather.com/en/in/pune/204848/weather-today/204848"
+    },
+    {
+      "name": "Ahmednagar",
+      "lat": 19.0952,
+      "lon": 74.7496,
+      "accu_query": "Ahmednagar Ahilyanagar Maharashtra India",
+      "accu_url": "https://www.accuweather.com/en/in/ahilyanagar/8-189314_1_al/weather-today/8-189314_1_al"
+    },
+    {
+      "name": "Aurangabad",
+      "lat": 19.8762,
+      "lon": 75.3433,
+      "accu_query": "Aurangabad Chhatrapati Sambhajinagar Maharashtra India",
+      "accu_url": "https://www.accuweather.com/en/in/chhatrapati-sambhajinagar/189320/weather-today/189320"
+    }
+  ]
+}

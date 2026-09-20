@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.log
+test_*.py
+inspect_*.py
+debug_*.py
+imd_*.png
+windy_*.png
+*.pptx
+!template/weather_template.pptx

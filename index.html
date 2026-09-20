@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Daily Weather Update</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0b0f1a;
+      --card:     #131928;
+      --border:   #1e2d4a;
+      --accent:   #3b82f6;
+      --accent2:  #6366f1;
+      --success:  #22c55e;
+      --warn:     #f59e0b;
+      --danger:   #ef4444;
+      --text:     #e2e8f0;
+      --muted:    #64748b;
+      --log-bg:   #0d1525;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 48px 40px 40px;
+      width: 100%;
+      max-width: 580px;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.5), 0 0 0 1px rgba(59,130,246,0.08);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card::before {
+      content: '';
+      position: absolute;
+      top: -1px; left: 0; right: 0; height: 3px;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      border-radius: 20px 20px 0 0;
+    }
+
+    .header { text-align: center; margin-bottom: 40px; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+      background: rgba(59,130,246,0.1);
+      border: 1px solid rgba(59,130,246,0.25);
+      border-radius: 99px;
+      padding: 4px 12px;
+      margin-bottom: 16px;
+    }
+    .badge .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    h1 {
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      background: linear-gradient(135deg, #e2e8f0 0%, #94a3b8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      line-height: 1.2;
+      margin-bottom: 8px;
+    }
+    .subtitle { font-size: 13px; color: var(--muted); }
+
+    .sources { display: flex; gap: 8px; justify-content: center; margin-bottom: 32px; }
+    .source-chip {
+      font-size: 11px;
+      font-weight: 500;
+      color: #94a3b8;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 6px;
+      padding: 4px 10px;
+    }
+
+    #btn-get {
+      width: 100%;
+      padding: 16px;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      color: #fff;
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.12s, box-shadow 0.15s;
+      box-shadow: 0 4px 20px rgba(59,130,246,0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+    #btn-get:hover:not(:disabled) { opacity: 0.92; transform: translateY(-1px); box-shadow: 0 8px 28px rgba(59,130,246,0.45); }
+    #btn-get:active:not(:disabled) { transform: translateY(0); }
+    #btn-get:disabled { opacity: 0.5; cursor: not-allowed; }
+    .spinner {
+      width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      display: none;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #progress-panel { margin-top: 24px; display: none; }
+    .panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    .panel-label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+    .step-counter { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+    #log {
+      background: var(--log-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+      height: 220px;
+      overflow-y: auto;
+      font-size: 12.5px;
+      font-family: 'Inter', monospace;
+      line-height: 1.7;
+      scroll-behavior: smooth;
+    }
+    .log-line { display: flex; align-items: flex-start; gap: 8px; animation: fadeIn 0.2s ease; }
+    @keyframes fadeIn { from { opacity:0; transform: translateY(3px); } to { opacity:1; transform: none; } }
+    .log-icon { flex-shrink: 0; margin-top: 1px; }
+    .log-msg  { color: #94a3b8; }
+    .log-line.ok   .log-msg { color: var(--success); }
+    .log-line.err  .log-msg { color: var(--danger); }
+    .log-line.info .log-msg { color: #60a5fa; }
+    .log-line.warn .log-msg { color: var(--warn); }
+
+    #download-section { display: none; margin-top: 24px; text-align: center; }
+    .result-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--success);
+      background: rgba(34,197,94,0.1);
+      border: 1px solid rgba(34,197,94,0.25);
+      border-radius: 99px;
+      padding: 6px 16px;
+      margin-bottom: 16px;
+    }
+    #btn-download {
+      width: 100%;
+      padding: 15px;
+      font-size: 15px;
+      font-weight: 600;
+      color: #fff;
+      background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.12s;
+      box-shadow: 0 4px 20px rgba(16,185,129,0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+    #btn-download:hover { opacity: 0.92; transform: translateY(-1px); }
+    .filename-label { margin-top: 10px; font-size: 12px; color: var(--muted); }
+
+    #error-section {
+      display: none;
+      margin-top: 20px;
+      background: rgba(239,68,68,0.08);
+      border: 1px solid rgba(239,68,68,0.2);
+      border-radius: 10px;
+      padding: 14px 16px;
+      font-size: 13px;
+      color: #fca5a5;
+    }
+
+    #log::-webkit-scrollbar { width: 4px; }
+    #log::-webkit-scrollbar-track { background: transparent; }
+    #log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <div class="header">
+    <div class="badge"><span class="dot"></span> Maharashtra</div>
+    <h1>Daily Weather<br>Update</h1>
+    <p class="subtitle">Automated data collection from AccuWeather · Windy · IMD</p>
+  </div>
+
+  <div class="sources">
+    <span class="source-chip">☁ AccuWeather</span>
+    <span class="source-chip">🌀 Windy</span>
+    <span class="source-chip">🇮🇳 IMD</span>
+    <span class="source-chip">📊 5 Locations</span>
+  </div>
+
+  <button id="btn-get" onclick="startJob()">
+    <span class="spinner" id="spinner"></span>
+    <span id="btn-label">GET DATA</span>
+  </button>
+
+  <div id="progress-panel">
+    <div class="panel-header">
+      <span class="panel-label">Progress</span>
+      <span class="step-counter" id="step-counter">—</span>
+    </div>
+    <div id="log"></div>
+  </div>
+
+  <div id="download-section">
+    <div class="result-badge">✓ Report Ready</div>
+    <button id="btn-download" onclick="downloadFile()">
+      ⬇ DOWNLOAD POWERPOINT
+    </button>
+    <div class="filename-label" id="filename-label"></div>
+  </div>
+
+  <div id="error-section">
+    ⚠ <span id="error-msg"></span>
+  </div>
+</div>
+
+<script>
+  let evtSource = null;
+  let stepCount = 0;
+  let currentFilename = null;
+
+  const log         = document.getElementById('log');
+  const panel       = document.getElementById('progress-panel');
+  const dlSection   = document.getElementById('download-section');
+  const errSection  = document.getElementById('error-section');
+  const spinner     = document.getElementById('spinner');
+  const btnGet      = document.getElementById('btn-get');
+  const btnLabel    = document.getElementById('btn-label');
+  const stepCounter = document.getElementById('step-counter');
+  const fnLabel     = document.getElementById('filename-label');
+  const errMsg      = document.getElementById('error-msg');
+
+  const API_BASE = window.location.protocol.startsWith('http') ? '' : 'http://127.0.0.1:5000';
+
+  // Check initial status on page load (if report already generated)
+  window.addEventListener('DOMContentLoaded', () => {
+    fetch(`${API_BASE}/status`)
+      .then(r => r.json())
+      .then(s => {
+        if (s.ppt_path && !s.running) {
+          const fname = s.ppt_path.split(/[\\\/]/).pop();
+          jobDone(fname);
+        }
+      })
+      .catch(() => {});
+  });
+
+  function addLog(text, cls = '') {
+    stepCount++;
+    stepCounter.textContent = `Step ${stepCount}`;
+    const icons = { ok: '✓', err: '✗', info: '→', warn: '⚠' };
+    const icon  = icons[cls] || '·';
+    const line  = document.createElement('div');
+    line.className = `log-line ${cls}`;
+    line.innerHTML = `
+      <span class="log-icon">${icon}</span>
+      <span class="log-msg">${escHtml(text)}</span>
+    `;
+    log.appendChild(line);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function classifyMsg(msg) {
+    if (msg.startsWith('ERROR') || msg.toLowerCase().includes('error') || msg.toLowerCase().includes('failed'))
+      return 'err';
+    if (msg.startsWith('DONE') || msg.includes('✓') || msg.toLowerCase().includes('complete'))
+      return 'ok';
+    if (msg.toLowerCase().includes('opening') || msg.toLowerCase().includes('creating'))
+      return 'info';
+    return '';
+  }
+
+  function startJob() {
+    log.innerHTML = '';
+    stepCount = 0;
+    stepCounter.textContent = '—';
+    dlSection.style.display  = 'none';
+    errSection.style.display = 'none';
+    panel.style.display      = 'block';
+    btnGet.disabled          = true;
+    spinner.style.display    = 'block';
+    btnLabel.textContent     = 'Running…';
+    currentFilename          = null;
+
+    if (evtSource) { evtSource.close(); evtSource = null; }
+
+    fetch(`${API_BASE}/get-data`, { method: 'POST' })
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) { showError(data.error); return; }
+        addLog('Job started…', 'info');
+        evtSource = new EventSource(`${API_BASE}/progress`);
+        evtSource.onmessage = e => {
+          const d = JSON.parse(e.data);
+          if (d.msg) {
+            const cls = classifyMsg(d.msg);
+            let display = d.msg.replace(/^DONE:.*/, 'PowerPoint saved ✓');
+            addLog(display, cls);
+          }
+          if (d.done) {
+            currentFilename = d.filename;
+            evtSource.close();
+            jobDone(d.filename);
+          }
+          if (d.error) {
+            evtSource.close();
+            showError(d.error);
+          }
+        };
+        evtSource.onerror = () => {
+          evtSource.close();
+          fetch(`${API_BASE}/status`).then(r=>r.json()).then(s => {
+            if (s.ppt_path) jobDone(s.ppt_path.split(/[\\\/]/).pop());
+            else if (s.error) showError(s.error);
+            else if (!s.running) showError('Job ended unexpectedly.');
+          });
+        };
+      })
+      .catch(err => showError(String(err)));
+  }
+
+  function jobDone(filename) {
+    currentFilename = filename;
+    btnGet.disabled         = false;
+    spinner.style.display   = 'none';
+    btnLabel.textContent    = 'GET DATA';
+    dlSection.style.display = 'block';
+    fnLabel.textContent     = filename;
+    addLog('Complete ✓', 'ok');
+  }
+
+  function showError(msg) {
+    btnGet.disabled          = false;
+    spinner.style.display    = 'none';
+    btnLabel.textContent     = 'GET DATA';
+    errSection.style.display = 'block';
+    errMsg.textContent       = msg;
+    addLog(`ERROR: ${msg}`, 'err');
+  }
+
+  function downloadFile() {
+    window.location.href = `${API_BASE}/download`;
+  }
+</script>
+
+</body>
+</html>
