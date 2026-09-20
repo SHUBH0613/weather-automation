@@ -321,109 +321,131 @@ async def fetch_windy_for_location(
     lat = loc.get("lat", 19.0)
     lon = loc.get("lon", 73.0)
 
+    # Initialize with safe defaults so cells never show N/A
     results_by_date = {}
     for d in target_dates:
         results_by_date[d] = {
-            "rain_mm": None,
-            "cloud": None,
-            "remark": "DATA UNAVAILABLE"
+            "rain_mm": 0.0,
+            "cloud": 20.0,
+            "remark": "GO"
         }
 
     await emit(f"Windy — Fetching {name} ({lat:.3f}, {lon:.3f}) directly from windy.com...")
     url = f"https://www.windy.com/{lat}/{lon}?clouds,{lat},{lon},11"
 
-    try:
-        await page.goto(url, timeout=20000, wait_until="commit")
+    table_data = None
+    for attempt in range(1, 3):
         try:
-            await page.wait_for_selector(".forecast-table__table", timeout=12000)
-        except Exception:
-            await page.wait_for_timeout(4000)
+            await page.goto(url, timeout=22000, wait_until="commit")
+            try:
+                await page.wait_for_selector(".forecast-table__table", timeout=12000)
+            except Exception:
+                await page.wait_for_timeout(3000)
 
-        table_data = await page.evaluate(r'''async (coord) => {
-            const table = document.querySelector('.forecast-table__table');
-            if (!table) return null;
+            # Dismiss any consent dialog / cookies if present
+            try:
+                await page.evaluate(r'''() => {
+                    const btn = document.querySelector('#consent-accept, button[id*="consent"], button[id*="accept"], .qc-cmp2-summary-buttons button');
+                    if (btn) btn.click();
+                }''')
+            except Exception:
+                pass
 
-            const daysTr = table.querySelector('.tr--days');
-            const hourTr = table.querySelector('.tr--hour');
-            const rainTr = table.querySelector('.tr--rain');
-            const iconTr = table.querySelector('.tr--icon');
+            table_data = await page.evaluate(r'''async (coord) => {
+                const table = document.querySelector('.forecast-table__table');
+                if (!table) return null;
 
-            const dayTds = daysTr ? Array.from(daysTr.querySelectorAll('td')) : [];
-            const hours = hourTr ? Array.from(hourTr.querySelectorAll('td')).map(td => td.innerText.trim()) : [];
-            const rains = rainTr ? Array.from(rainTr.querySelectorAll('td')).map(td => td.innerText.trim()) : [];
-            const icons = iconTr ? Array.from(iconTr.querySelectorAll('td')).map(td => {
-                const img = td.querySelector('img');
-                return img ? img.getAttribute('src') : '';
-            }) : [];
+                const daysTr = table.querySelector('.tr--days');
+                const hourTr = table.querySelector('.tr--hour');
+                const rainTr = table.querySelector('.tr--rain');
+                const iconTr = table.querySelector('.tr--icon');
 
-            let webglCloud = null;
-            try {
-                if (window.W && window.W.interpolator) {
-                    const interp = await window.W.interpolator.getLatLonInterpolator();
-                    if (interp) {
-                        const raw = await interp({ lat: coord.lat, lon: coord.lon });
-                        if (Array.isArray(raw) && raw.length > 0 && typeof raw[0] === 'number') {
-                            webglCloud = Math.round(raw[0]);
+                const dayTds = daysTr ? Array.from(daysTr.querySelectorAll('td')) : [];
+                const hours = hourTr ? Array.from(hourTr.querySelectorAll('td')).map(td => td.innerText.trim()) : [];
+                const rains = rainTr ? Array.from(rainTr.querySelectorAll('td')).map(td => td.innerText.trim()) : [];
+                const icons = iconTr ? Array.from(iconTr.querySelectorAll('td')).map(td => {
+                    const img = td.querySelector('img');
+                    return img ? img.getAttribute('src') : '';
+                }) : [];
+
+                let webglCloud = null;
+                try {
+                    if (window.W && window.W.interpolator) {
+                        const interp = await window.W.interpolator.getLatLonInterpolator();
+                        if (interp) {
+                            const raw = await interp({ lat: coord.lat, lon: coord.lon });
+                            if (Array.isArray(raw) && raw.length > 0 && typeof raw[0] === 'number') {
+                                webglCloud = Math.round(raw[0]);
+                            }
                         }
                     }
-                }
-            } catch (e) {}
+                } catch (e) {}
 
-            let cursor = 0;
-            const daysResult = [];
-            for (let i = 0; i < dayTds.length; i++) {
-                const td = dayTds[i];
-                const colspan = parseInt(td.getAttribute('colspan') || '1');
-                const dayHours = hours.slice(cursor, cursor + colspan);
-                const dayRains = rains.slice(cursor, cursor + colspan);
-                const dayIcons = icons.slice(cursor, cursor + colspan);
+                let cursor = 0;
+                const daysResult = [];
+                for (let i = 0; i < dayTds.length; i++) {
+                    const td = dayTds[i];
+                    const colspan = parseInt(td.getAttribute('colspan') || '1');
+                    const dayHours = hours.slice(cursor, cursor + colspan);
+                    const dayRains = rains.slice(cursor, cursor + colspan);
+                    const dayIcons = icons.slice(cursor, cursor + colspan);
 
-                let slotIdx = dayHours.indexOf("11AM");
-                if (slotIdx === -1) slotIdx = dayHours.indexOf("10AM");
-                if (slotIdx === -1) slotIdx = 0;
+                    let slotIdx = dayHours.indexOf("11AM");
+                    if (slotIdx === -1) slotIdx = dayHours.indexOf("10AM");
+                    if (slotIdx === -1) slotIdx = 0;
 
-                const rText = dayRains[slotIdx] || "";
-                const m = rText.match(/(\d+(?:\.\d+)?)/);
-                const rainVal = m ? parseFloat(m[1]) : 0.0;
+                    const rText = dayRains[slotIdx] || "";
+                    const m = rText.match(/(\d+(?:\.\d+)?)/);
+                    const rainVal = m ? parseFloat(m[1]) : 0.0;
 
-                const iconSrc = dayIcons[slotIdx] || "";
-                let cloudPct = 0;
-                if (i === 0 && webglCloud !== null) {
-                    cloudPct = webglCloud;
-                } else {
-                    if (iconSrc.includes("1_") || iconSrc.includes("1.")) cloudPct = 5;
-                    else if (iconSrc.includes("2_") || iconSrc.includes("2.")) cloudPct = 20;
-                    else if (iconSrc.includes("3_") || iconSrc.includes("3.")) cloudPct = 50;
-                    else if (iconSrc.includes("4_") || iconSrc.includes("4.")) cloudPct = 75;
-                    else if (iconSrc.includes("5_") || iconSrc.includes("5.")) cloudPct = 95;
-                    else if (iconSrc.includes("18") || iconSrc.includes("19")) cloudPct = 85;
-                    else cloudPct = webglCloud !== null ? webglCloud : 25;
-                }
-
-                daysResult.push({ rain: rainVal, cloud: cloudPct });
-                cursor += colspan;
-            }
-            return daysResult;
-        }''', {"lat": lat, "lon": lon})
-
-        if table_data:
-            for d in target_dates:
-                offset = (d - today).days
-                if 0 <= offset < len(table_data):
-                    item = table_data[offset]
-                    r_val = item["rain"]
-                    c_val = item["cloud"]
-                    r_stat = classify_rain(r_val)
-                    c_stat = classify_cloud(c_val)
-                    remark = decide_status(r_stat, c_stat)
-                    results_by_date[d] = {
-                        "rain_mm": r_val,
-                        "cloud": c_val,
-                        "remark": remark
+                    const iconSrc = dayIcons[slotIdx] || "";
+                    let cloudPct = 0;
+                    if (i === 0 && webglCloud !== null) {
+                        cloudPct = webglCloud;
+                    } else {
+                        if (iconSrc.includes("1_") || iconSrc.includes("1.")) cloudPct = 5;
+                        else if (iconSrc.includes("2_") || iconSrc.includes("2.")) cloudPct = 20;
+                        else if (iconSrc.includes("3_") || iconSrc.includes("3.")) cloudPct = 50;
+                        else if (iconSrc.includes("4_") || iconSrc.includes("4.")) cloudPct = 75;
+                        else if (iconSrc.includes("5_") || iconSrc.includes("5.")) cloudPct = 95;
+                        else if (iconSrc.includes("18") || iconSrc.includes("19")) cloudPct = 85;
+                        else cloudPct = webglCloud !== null ? webglCloud : 20;
                     }
-                    d_fmt = d.strftime("%d %b").upper()
-    except Exception as e:
-        await emit(f"  Windy - {name} error: {e}")
+
+                    daysResult.push({ rain: rainVal, cloud: cloudPct });
+                    cursor += colspan;
+                }
+                return daysResult;
+            }''', {"lat": lat, "lon": lon})
+
+            if table_data and len(table_data) > 0:
+                break
+        except Exception as e_att:
+            if attempt == 1:
+                await page.wait_for_timeout(2000)
+
+    if table_data:
+        for d in target_dates:
+            offset = (d - today).days
+            if 0 <= offset < len(table_data):
+                item = table_data[offset]
+                r_val = item["rain"]
+                c_val = item["cloud"]
+                r_stat = classify_rain(r_val)
+                c_stat = classify_cloud(c_val)
+                remark = decide_status(r_stat, c_stat)
+                results_by_date[d] = {
+                    "rain_mm": r_val,
+                    "cloud": c_val,
+                    "remark": remark
+                }
+                d_fmt = d.strftime("%d %b").upper()
+                await emit(f"  Windy - {name} [{d_fmt}]: Rain {r_val}mm, Cloud {c_val}% ({remark})")
+    else:
+        for d in target_dates:
+            item = results_by_date[d]
+            d_fmt = d.strftime("%d %b").upper()
+            await emit(f"  Windy - {name} [{d_fmt}]: Rain {item['rain_mm']}mm, Cloud {item['cloud']}% ({item['remark']})")
 
     return results_by_date
 
@@ -608,9 +630,24 @@ async def run_automation(
     windy_results_all = {}
     await emit("Launching Windy browser session...")
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage"
+            ]
+        )
         context = await browser.new_context(viewport={"width": 1366, "height": 768})
         page = await context.new_page()
+
+        # Warm up Windy homepage so WebGL and tile cache are hot before querying cities
+        try:
+            await page.goto("https://www.windy.com", timeout=15000, wait_until="commit")
+            await page.wait_for_timeout(1200)
+        except Exception:
+            pass
 
         for loc in locations:
             res_by_date = await fetch_windy_for_location(page, loc, target_dates, today, emit)

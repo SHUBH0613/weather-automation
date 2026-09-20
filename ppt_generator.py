@@ -263,81 +263,44 @@ def _populate_table(slide, weather_data: List[Dict[str, Any]]):
         max_top = 5143500 - 880000 - Inches(0.08)
         legend_shape.top = min(legend_shape.top, max_top)
 
+HORIZONTAL_LEGEND_PATH = os.path.join(os.path.dirname(__file__), "template", "imd_legend_horizontal.png")
+
 def _add_imd_legend(slide):
-    """Adds the official IMD Color Code Legend panel on the right side of the slide."""
-    legend_shape = slide.shapes.add_shape(
-        MSO_SHAPE.ROUNDED_RECTANGLE,
-        Inches(6.6), Inches(0.75), Inches(3.1), Inches(4.65)
-    )
-    legend_shape.fill.solid()
-    legend_shape.fill.fore_color.rgb = RGBColor(0xF8, 0xF9, 0xFA)
-    legend_shape.line.color.rgb = RGBColor(0xCB, 0xD5, 0xE1)
-
-    ltf = legend_shape.text_frame
-    ltf.word_wrap = True
-    ltf.margin_left = Inches(0.12)
-    ltf.margin_right = Inches(0.12)
-    ltf.margin_top = Inches(0.12)
-    ltf.margin_bottom = Inches(0.12)
-
-    lp0 = ltf.paragraphs[0]
-    lp0.text = "IMD WARNING LEGEND"
-    lp0.font.name = "Arial"
-    lp0.font.size = Pt(13)
-    lp0.font.bold = True
-    lp0.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
-    lp0.alignment = PP_ALIGN.CENTER
-    lp0.space_after = Pt(6)
-
-    legend_items = [
-        ("GREEN", "NO WARNING", "No Action required.\nNormal conditions.", RGBColor(0x00, 0xB0, 0x50)),
-        ("YELLOW", "WATCH", "Be Updated.\nWeather alert watch.", RGBColor(0xD9, 0x77, 0x06)),
-        ("ORANGE", "ALERT", "Be Prepared.\nSevere weather expected.", RGBColor(0xEA, 0x58, 0x0C)),
-        ("RED", "WARNING", "Take Action.\nExtreme weather hazard.", RGBColor(0xDC, 0x26, 0x26)),
-    ]
-
-    for code, title, desc, col in legend_items:
-        p_title = ltf.add_paragraph()
-        p_title.text = f"■  {title} ({code})"
-        p_title.font.name = "Arial"
-        p_title.font.size = Pt(11)
-        p_title.font.bold = True
-        p_title.font.color.rgb = col
-        p_title.space_before = Pt(4)
-
-        p_desc = ltf.add_paragraph()
-        p_desc.text = desc
-        p_desc.font.name = "Arial"
-        p_desc.font.size = Pt(9)
-        p_desc.font.color.rgb = RGBColor(0x47, 0x55, 0x69)
-        p_desc.space_after = Pt(2)
-
-    p_rule = ltf.add_paragraph()
-    p_rule.text = "CRITERIA: Green=GO | Yellow=LTD GO | Orange/Red=NO GO"
-    p_rule.font.name = "Arial"
-    p_rule.font.size = Pt(8.5)
-    p_rule.font.bold = True
-    p_rule.font.color.rgb = RGBColor(0x33, 0x41, 0x55)
-    p_rule.space_before = Pt(6)
-    p_rule.alignment = PP_ALIGN.CENTER
-
-    p_src = ltf.add_paragraph()
-    p_src.text = "Source: IMD District GIS Warning Portal"
-    p_src.font.name = "Arial"
-    p_src.font.size = Pt(8)
-    p_src.font.italic = True
-    p_src.font.color.rgb = RGBColor(0x94, 0xA3, 0xB8)
-    p_src.space_before = Pt(4)
-    p_src.alignment = PP_ALIGN.CENTER
+    """Adds the exact horizontal IMD warning legend (Green No Warning, Yellow Watch, Orange Alert, Red Warning) as requested."""
+    if os.path.exists(HORIZONTAL_LEGEND_PATH):
+        slide.shapes.add_picture(
+            HORIZONTAL_LEGEND_PATH,
+            Inches(1.4), Inches(5.12),
+            width=Inches(7.2), height=Inches(0.32)
+        )
+    else:
+        # Vector fallback if image missing
+        tbl_shape = slide.shapes.add_table(1, 4, Inches(1.5), Inches(5.12), Inches(7.0), Inches(0.32))
+        tbl = tbl_shape.table
+        items = [
+            ("■ No Warning", RGBColor(0x00, 0x90, 0x00)),
+            ("■ Watch", RGBColor(0xE6, 0xB8, 0x00)),
+            ("■ Alert", RGBColor(0xF9, 0x73, 0x16)),
+            ("■ Warning", RGBColor(0xDC, 0x26, 0x26))
+        ]
+        for col_idx, (text, col) in enumerate(items):
+            cell = tbl.cell(0, col_idx)
+            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+            p = cell.text_frame.paragraphs[0]
+            p.text = text
+            p.font.name = "Arial"
+            p.font.size = Pt(10)
+            p.font.bold = True
+            p.font.color.rgb = col
+            p.alignment = PP_ALIGN.CENTER
 
 def _create_imd_slide(prs, template_imd_slide, state_name: str, date_str: str, image_path: Optional[str], available: bool):
-    """Creates an IMD slide for a specific state and date."""
+    """Creates an IMD slide for a specific state and date with full-size centered map and horizontal legend."""
     slide_layout = template_imd_slide.slide_layout
     new_slide = prs.slides.add_slide(slide_layout)
 
     # Copy shapes from template_imd_slide (banner, etc.)
     for shp in template_imd_slide.shapes:
-        # Avoid copying old picture or city text boxes from template
         if shp.shape_type == pptx.enum.shapes.MSO_SHAPE_TYPE.PICTURE:
             continue
         if shp.has_text_frame and ("WX UPDATE" in shp.text_frame.text or "NASHIK" in shp.text_frame.text or "PUNE" in shp.text_frame.text or "MUMBAI" in shp.text_frame.text or "AURANGABAD" in shp.text_frame.text or "AHMEDNAGAR" in shp.text_frame.text):
@@ -348,18 +311,18 @@ def _create_imd_slide(prs, template_imd_slide, state_name: str, date_str: str, i
     title_text = f"IMD DISTRICT-WISE WARNING — {state_name.upper()} ({date_str})"
     _update_slide_title(new_slide, title_text)
 
-    # Place Map image or "DATA NOT AVAILABLE" message
+    # Place Map image or "DATA NOT AVAILABLE" message centered
     if available and image_path and os.path.exists(image_path) and os.path.getsize(image_path) > 5000:
         new_slide.shapes.add_picture(
             image_path,
-            Inches(0.4), Inches(0.75),
-            width=Inches(6.0), height=Inches(4.65)
+            Inches(1.25), Inches(0.70),
+            width=Inches(7.5), height=Inches(4.35)
         )
     else:
         # Message box when IMD data exceeds horizon or unavailable
         box = new_slide.shapes.add_shape(
             MSO_SHAPE.ROUNDED_RECTANGLE,
-            Inches(0.4), Inches(0.75), Inches(6.0), Inches(4.65)
+            Inches(1.25), Inches(0.70), Inches(7.5), Inches(4.35)
         )
         box.fill.solid()
         box.fill.fore_color.rgb = RGBColor(0xFE, 0xF2, 0xF2)
@@ -383,7 +346,7 @@ def _create_imd_slide(prs, template_imd_slide, state_name: str, date_str: str, i
         bp1.alignment = PP_ALIGN.CENTER
         bp1.space_before = Pt(12)
 
-    # Add official IMD Legend
+    # Add requested horizontal IMD Legend below the map
     _add_imd_legend(new_slide)
 
 
@@ -429,16 +392,14 @@ def generate_ppt(date_str_or_job: Any, weather_data: Optional[list] = None, imd_
     title_label = f"WX UPDATE {date_range_str}" if date_range_str else "WX UPDATE"
     _update_slide_title(template_title_slide, title_label)
 
-    # Add subtitle with list of locations to Title Slide
-    if loc_names:
-        loc_str = "Locations: " + ", ".join(loc_names)
-        sub_box = template_title_slide.shapes.add_textbox(Inches(0.5), Inches(4.8), Inches(9.0), Inches(0.4))
-        sub_p = sub_box.text_frame.paragraphs[0]
-        sub_p.text = loc_str
-        sub_p.font.name = "Arial"
-        sub_p.font.size = Pt(12)
-        sub_p.font.italic = True
-        sub_p.font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
+    # Remove any location text from Title Slide (Slide 0) as requested
+    for shp in list(template_title_slide.shapes):
+        if shp.has_text_frame and "locations" in shp.text_frame.text.lower():
+            try:
+                sp_elem = shp._element
+                sp_elem.getparent().remove(sp_elem)
+            except Exception:
+                pass
 
     # 2. Weather Table Slides
     # For each date, create/populate table slide
