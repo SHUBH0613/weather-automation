@@ -63,8 +63,8 @@ def _update_slide_title(slide, title_text: str):
     r.font.underline = True
     r.font.color.rgb = RGBColor(0x1B, 0x36, 0x5D)
 
-def _fill_2line_cell(cell, top_text: str, bottom_text: str):
-    """Fill a clean two-line cell (Windy on line 1, Accuwx on line 2) in Arial 14."""
+def _fill_2line_cell(cell, top_text: str, bottom_text: str, font_size_pt: float = 12.0):
+    """Fill a clean two-line cell (Windy on line 1, Accuwx on line 2) with compact spacing."""
     cell.vertical_anchor = MSO_ANCHOR.MIDDLE
     cell.margin_left = Inches(0.04)
     cell.margin_right = Inches(0.04)
@@ -82,22 +82,22 @@ def _fill_2line_cell(cell, top_text: str, bottom_text: str):
 
     p0 = tf.paragraphs[0]
     p0.text = ""
-    p0.space_after = Pt(2)
+    p0.space_after = Pt(1)
     r0 = p0.add_run()
     r0.text = top_text
     r0.font.name = "Arial"
-    r0.font.size = Pt(14)
+    r0.font.size = Pt(font_size_pt)
 
     p1 = tf.paragraphs[1]
     p1.text = ""
-    p1.space_before = Pt(2)
+    p1.space_before = Pt(1)
     r1 = p1.add_run()
     r1.text = bottom_text
     r1.font.name = "Arial"
-    r1.font.size = Pt(14)
+    r1.font.size = Pt(font_size_pt)
 
-def _fill_remarks_cell(cell, w_remark: str, a_remark: str):
-    """Fill remarks cell in Arial 14 Bold with color-coded GO/LTD GO/NO GO."""
+def _fill_remarks_cell(cell, w_remark: str, a_remark: str, font_size_pt: float = 12.0):
+    """Fill remarks cell in Arial Bold with color-coded GO/LTD GO/NO GO without text wrapping."""
     cell.vertical_anchor = MSO_ANCHOR.MIDDLE
     cell.margin_left = Inches(0.04)
     cell.margin_right = Inches(0.04)
@@ -113,28 +113,32 @@ def _fill_remarks_cell(cell, w_remark: str, a_remark: str):
         p_elem = tf.paragraphs[-1]._p
         p_elem.getparent().remove(p_elem)
 
+    # Prevent long text wrapping that causes row height explosion
+    disp_w = "DATA N/A" if w_remark == "DATA UNAVAILABLE" else w_remark
+    disp_a = "DATA N/A" if a_remark == "DATA UNAVAILABLE" else a_remark
+
     p0 = tf.paragraphs[0]
     p0.text = ""
-    p0.space_after = Pt(2)
+    p0.space_after = Pt(1)
     r0 = p0.add_run()
-    r0.text = w_remark
+    r0.text = disp_w
     r0.font.name = "Arial"
-    r0.font.size = Pt(14)
+    r0.font.size = Pt(font_size_pt)
     r0.font.bold = True
     r0.font.color.rgb = COLOR_MAP.get(w_remark, RGBColor(0x00, 0x00, 0x00))
 
     p1 = tf.paragraphs[1]
     p1.text = ""
-    p1.space_before = Pt(2)
+    p1.space_before = Pt(1)
     r1 = p1.add_run()
-    r1.text = a_remark
+    r1.text = disp_a
     r1.font.name = "Arial"
-    r1.font.size = Pt(14)
+    r1.font.size = Pt(font_size_pt)
     r1.font.bold = True
     r1.font.color.rgb = COLOR_MAP.get(a_remark, RGBColor(0x00, 0x00, 0x00))
 
 def _populate_table(slide, weather_data: List[Dict[str, Any]]):
-    """Populates the 6-column table on the given slide."""
+    """Populates the 6-column table and positions the Legend table without overlap."""
     table_shape = None
     for shape in slide.shapes:
         if shape.has_table and len(shape.table.columns) == 6:
@@ -144,7 +148,7 @@ def _populate_table(slide, weather_data: List[Dict[str, Any]]):
     if not table_shape:
         return
 
-    table_shape.top = 450000
+    table_shape.top = 475000
     tbl = table_shape.table
 
     # Column widths: 0.77in, 2.42in, 1.38in, 1.87in, 1.76in, 1.86in
@@ -152,18 +156,33 @@ def _populate_table(slide, weather_data: List[Dict[str, Any]]):
     for i, w in enumerate(column_widths):
         tbl.columns[i].width = w
 
+    num_locs = len(weather_data)
+    if num_locs <= 5:
+        row_height = Inches(0.48)
+        font_size = 12.0
+        header_height = Inches(0.38)
+    elif num_locs <= 7:
+        row_height = Inches(0.42)
+        font_size = 11.0
+        header_height = Inches(0.36)
+    else:
+        row_height = Inches(0.36)
+        font_size = 10.0
+        header_height = Inches(0.34)
+
     # Format header row (Row 0)
+    tbl.rows[0].height = header_height
     for c_idx in range(6):
         cell = tbl.cell(0, c_idx)
         cell.vertical_anchor = MSO_ANCHOR.MIDDLE
         cell.margin_left = Inches(0.04)
         cell.margin_right = Inches(0.04)
-        cell.margin_top = Inches(0.04)
-        cell.margin_bottom = Inches(0.04)
+        cell.margin_top = Inches(0.02)
+        cell.margin_bottom = Inches(0.02)
         for p in cell.text_frame.paragraphs:
             for r in p.runs:
                 r.font.name = "Arial"
-                r.font.size = Pt(14)
+                r.font.size = Pt(13)
                 r.font.bold = True
                 r.font.underline = True
 
@@ -176,7 +195,7 @@ def _populate_table(slide, weather_data: List[Dict[str, Any]]):
 
     for idx, item in enumerate(weather_data):
         row = tbl.rows[idx + 1]
-        row.height = 550000
+        row.height = row_height
 
         # Col 0: Ser No
         c0 = row.cells[0]
@@ -188,7 +207,7 @@ def _populate_table(slide, weather_data: List[Dict[str, Any]]):
         r0 = p0.add_run()
         r0.text = str(idx + 1)
         r0.font.name = "Arial"
-        r0.font.size = Pt(14)
+        r0.font.size = Pt(font_size)
         r0.font.bold = True
 
         # Col 1: Loc (all words in one line, no wrapping)
@@ -202,11 +221,11 @@ def _populate_table(slide, weather_data: List[Dict[str, Any]]):
         r1 = p1.add_run()
         r1.text = item["location"].upper()
         r1.font.name = "Arial"
-        r1.font.size = Pt(14)
+        r1.font.size = Pt(font_size + 0.5)
         r1.font.bold = True
 
         # Col 2: Wx App (Windy on line 1, Accuwx on line 2)
-        _fill_2line_cell(row.cells[2], "Windy", "Accuwx")
+        _fill_2line_cell(row.cells[2], "Windy", "Accuwx", font_size_pt=font_size)
 
         # Col 3: Forecast Rain mm/%
         w_rain = _fmt_num(item.get("windy_rain"), "mm")
@@ -216,17 +235,33 @@ def _populate_table(slide, weather_data: List[Dict[str, Any]]):
             a_rain = f"{item['accu_rain_mm']}mm"
         else:
             a_rain = "N/A"
-        _fill_2line_cell(row.cells[3], w_rain, a_rain)
+        _fill_2line_cell(row.cells[3], w_rain, a_rain, font_size_pt=font_size)
 
         # Col 4: Cloud cover %
         w_cloud = _fmt_num(item.get("windy_cloud"), "%")
         a_cloud = _fmt_num(item.get("accu_cloud"), "%")
-        _fill_2line_cell(row.cells[4], w_cloud, a_cloud)
+        _fill_2line_cell(row.cells[4], w_cloud, a_cloud, font_size_pt=font_size)
 
         # Col 5: Remarks (Color-coded)
         w_rmk = item.get("windy_remark", "DATA UNAVAILABLE")
         a_rmk = item.get("accu_remark", "DATA UNAVAILABLE")
-        _fill_remarks_cell(row.cells[5], w_rmk, a_rmk)
+        _fill_remarks_cell(row.cells[5], w_rmk, a_rmk, font_size_pt=font_size)
+
+    # Safely position Legend table below main table
+    legend_shape = None
+    for shape in slide.shapes:
+        if shape.has_table and len(shape.table.columns) == 3:
+            legend_shape = shape
+            break
+
+    if legend_shape:
+        legend_shape.height = 880000
+        tbl_bottom = table_shape.top + header_height + (num_locs * row_height)
+        legend_shape.left = 4906737
+        # Ensure comfortable spacing below table, bounded by slide height
+        legend_shape.top = max(tbl_bottom + Inches(0.15), 4150000)
+        max_top = 5143500 - 880000 - Inches(0.08)
+        legend_shape.top = min(legend_shape.top, max_top)
 
 def _add_imd_legend(slide):
     """Adds the official IMD Color Code Legend panel on the right side of the slide."""
@@ -352,24 +387,28 @@ def _create_imd_slide(prs, template_imd_slide, state_name: str, date_str: str, i
     _add_imd_legend(new_slide)
 
 
-def generate_ppt(job_result: Dict[str, Any]) -> str:
+def generate_ppt(date_str_or_job: Any, weather_data: Optional[list] = None, imd_image: Optional[str] = None) -> str:
     """
     Main PPT generation entry point.
-    job_result format:
-    {
-        "date_range_str": "21 SEP 2026 - 23 SEP 2026",
-        "dates": [
-            {
-                "date_str": "21 SEP 2026",
-                "weather_data": [ ... ],
-                "imd_maps": [
-                    {"state": "Maharashtra", "image_path": "...", "available": True}, ...
-                ]
-            }, ...
-        ],
-        "locations": ["NASHIK", "BHUJ", ...]
-    }
+    Supports both unified job_result dict and legacy (date_str, weather_data, imd_image).
     """
+    if isinstance(date_str_or_job, str):
+        job_result = {
+            "date_range_str": date_str_or_job,
+            "dates": [
+                {
+                    "date_str": date_str_or_job,
+                    "weather_data": weather_data or [],
+                    "imd_maps": [
+                        {"state": "Maharashtra", "image_path": imd_image, "available": bool(imd_image)}
+                    ]
+                }
+            ],
+            "locations": [x.get("location", "").upper() for x in (weather_data or [])]
+        }
+    else:
+        job_result = date_str_or_job
+
     if not os.path.exists(TEMPLATE_PATH):
         raise FileNotFoundError(f"Template not found at {TEMPLATE_PATH}")
 

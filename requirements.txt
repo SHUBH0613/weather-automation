@@ -4,3 +4,4 @@ playwright>=1.49.0
 beautifulsoup4>=4.12.0
 python-pptx>=1.0.0
 pytz>=2024.1
+requests>=2.31.0
