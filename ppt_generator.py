@@ -311,27 +311,44 @@ def _create_imd_slide(prs, template_imd_slide, template_table_slide, state_name:
     blank_layout = prs.slide_layouts[10] if len(prs.slide_layouts) > 10 else template_imd_slide.slide_layout
     new_slide = prs.slides.add_slide(blank_layout)
 
-    # 1. Add top red banner (copy from template_table_slide.shapes[0] which is the red banner)
-    if template_table_slide and len(template_table_slide.shapes) > 0:
-        banner_elem = copy.deepcopy(template_table_slide.shapes[0]._element)
-        new_slide.shapes._spTree.append(banner_elem)
+    # ── 1. Red header banner — built fresh as a filled rectangle (NOT copied from template)
+    # Copying the template text-box brings <a:spAutoFit/> which auto-expands the box
+    # and makes the IMD title overflow the slide. A fresh RECTANGLE has noAutofit by default.
+    BANNER_H = Inches(0.54)
+    banner = new_slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, Inches(10.0), BANNER_H)
+    banner.fill.solid()
+    banner.fill.fore_color.rgb = RGBColor(0xFF, 0x00, 0x00)
+    banner.line.fill.background()  # no border
 
-    # 2. Add Title on red banner
+    btf = banner.text_frame
+    btf.word_wrap = False
+    btf.vertical_anchor = MSO_ANCHOR.MIDDLE
+
     title_text = f"IMD DISTRICT-WISE WARNING — {state_name.upper()} ({date_str})"
-    _update_slide_title(new_slide, title_text, font_size_pt=16.0)
+    bp = btf.paragraphs[0]
+    bp.text = ""
+    bp.alignment = PP_ALIGN.CENTER
+    br = bp.add_run()
+    br.text = title_text
+    br.font.name = "Arial"
+    br.font.size = Pt(15)
+    br.font.bold = True
+    br.font.underline = True
+    br.font.color.rgb = RGBColor(0x1B, 0x36, 0x5D)
 
-    # Place Map image or "DATA NOT AVAILABLE" message centered
+    # ── 2. Map image (starts just below banner)
+    MAP_TOP = Inches(0.60)
     if available and image_path and os.path.exists(image_path) and os.path.getsize(image_path) > 5000:
         new_slide.shapes.add_picture(
             image_path,
-            Inches(1.25), Inches(0.70),
+            Inches(1.25), MAP_TOP,
             width=Inches(7.5), height=Inches(4.35)
         )
     else:
         # Message box when IMD data exceeds horizon or unavailable
         box = new_slide.shapes.add_shape(
             MSO_SHAPE.ROUNDED_RECTANGLE,
-            Inches(1.25), Inches(0.70), Inches(7.5), Inches(4.35)
+            Inches(1.25), MAP_TOP, Inches(7.5), Inches(4.35)
         )
         box.fill.solid()
         box.fill.fore_color.rgb = RGBColor(0xFE, 0xF2, 0xF2)
@@ -355,7 +372,7 @@ def _create_imd_slide(prs, template_imd_slide, template_table_slide, state_name:
         bp1.alignment = PP_ALIGN.CENTER
         bp1.space_before = Pt(12)
 
-    # Add requested horizontal IMD Legend below the map
+    # ── 3. Horizontal IMD Legend below the map
     _add_imd_legend(new_slide)
 
 
