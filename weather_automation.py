@@ -346,7 +346,13 @@ async def fetch_windy_for_location(
                 pass
 
             await page.goto(url, timeout=25000, wait_until="commit")
-            await page.wait_for_selector(".forecast-table__table", timeout=20000)
+
+            # Wait for table in DOM without being blocked by visibility/occlusion checks
+            try:
+                await page.wait_for_selector(".forecast-table__table", state="attached", timeout=20000)
+            except Exception:
+                await page.wait_for_timeout(3000)
+
             await page.wait_for_timeout(1500)
 
             # Dismiss any consent dialog / cookies if present
@@ -359,7 +365,7 @@ async def fetch_windy_for_location(
                 pass
 
             table_data = await page.evaluate(r'''() => {
-                const table = document.querySelector('.forecast-table__table');
+                const table = document.querySelector('.forecast-table__table') || document.querySelector('.forecast-table');
                 if (!table) return null;
 
                 const daysTr = table.querySelector('.tr--days');
@@ -665,7 +671,10 @@ async def run_automation(
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage"
+                "--disable-dev-shm-usage",
+                "--enable-webgl",
+                "--use-gl=swiftshader",
+                "--ignore-gpu-blocklist"
             ]
         )
         context = await browser.new_context(
@@ -674,6 +683,13 @@ async def run_automation(
             viewport={"width": 1366, "height": 768},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         )
+        await context.add_init_script(r'''
+            try {
+                window.localStorage.setItem('settings_consent', 'true');
+                window.localStorage.setItem('settings_consent_ts', Date.now().toString());
+                window.localStorage.setItem('settings_analyticsConsentRequired', 'false');
+            } catch(e) {}
+        ''')
         page = await context.new_page()
 
         for loc in locations:
