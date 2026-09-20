@@ -384,7 +384,19 @@ async def fetch_windy_for_location(
                     return img ? img.getAttribute('src') : '';
                 });
 
-                return { dayTds, hours, rains, icons };
+                let rainUnit = 'mm';
+                try {
+                    if (window.W && window.W.metrics && window.W.metrics.rain && window.W.metrics.rain.metric) {
+                        rainUnit = window.W.metrics.rain.metric.toLowerCase();
+                    } else {
+                        const span = document.querySelector('.legend-item--rain .legend-right');
+                        if (span && span.innerText) {
+                            rainUnit = span.innerText.trim().toLowerCase();
+                        }
+                    }
+                } catch(e) {}
+
+                return { dayTds, hours, rains, icons, rainUnit };
             }''')
 
             if table_data and table_data.get("dayTds"):
@@ -399,10 +411,37 @@ async def fetch_windy_for_location(
         hours = table_data.get("hours", [])
         rains = table_data.get("rains", [])
         icons = table_data.get("icons", [])
+        rain_unit = table_data.get("rainUnit", "mm").lower()
 
         cursor = 0
-        daytime_hours = {"8AM", "11AM", "2PM", "5PM"}
         parsed_days = []
+
+        def _is_daytime(hr_str: str) -> bool:
+            h = hr_str.upper().strip().replace(" ", "").replace("H", "").replace(":00", "")
+            return h in {"8AM", "11AM", "2PM", "5PM", "08", "8", "11", "14", "17"}
+
+        def _parse_rain_val(r_text: str) -> float:
+            m = re.search(r'(\d+(?:\.\d+)?)', r_text)
+            if not m:
+                return 0.0
+            val = float(m.group(1))
+            if rain_unit == "in" or "in" in r_text.lower() or '"' in r_text:
+                val = val * 25.4
+            elif rain_unit == "cm":
+                val = val * 10.0
+            return val
+
+        def _parse_cloud_val(ic: str) -> float:
+            if "1_" in ic or "1." in ic: return 5.0
+            if "2_" in ic or "2." in ic: return 20.0
+            if "3_" in ic or "3." in ic: return 50.0
+            if "4_" in ic or "4." in ic: return 75.0
+            if "5_" in ic or "5." in ic: return 95.0
+            if "18" in ic or "19" in ic: return 85.0
+            if "20" in ic or "21" in ic: return 80.0
+            if "14" in ic: return 90.0
+            if "17" in ic: return 70.0
+            return 20.0
 
         for d_info in day_tds:
             colspan = d_info.get("colspan", 1)
@@ -414,40 +453,21 @@ async def fetch_windy_for_location(
             day_clouds = []
 
             for h_idx, hr in enumerate(d_hours):
-                if hr in daytime_hours:
-                    # Rain
+                if _is_daytime(hr):
                     r_text = d_rains[h_idx] if h_idx < len(d_rains) else ""
-                    m = re.search(r'(\d+(?:\.\d+)?)', r_text)
-                    r_val = float(m.group(1)) if m else 0.0
-                    day_rain_sum += r_val
+                    day_rain_sum += _parse_rain_val(r_text)
 
-                    # Cloud from icon
                     ic = d_icons[h_idx] if h_idx < len(d_icons) else ""
-                    if "1_" in ic or "1." in ic: c = 5.0
-                    elif "2_" in ic or "2." in ic: c = 20.0
-                    elif "3_" in ic or "3." in ic: c = 50.0
-                    elif "4_" in ic or "4." in ic: c = 75.0
-                    elif "5_" in ic or "5." in ic: c = 95.0
-                    elif "18" in ic or "19" in ic: c = 85.0
-                    else: c = 20.0
-                    day_clouds.append(c)
+                    day_clouds.append(_parse_cloud_val(ic))
 
             # Fallback if no specific daytime slots were matched
             if not day_clouds and d_hours:
                 for h_idx, hr in enumerate(d_hours):
                     r_text = d_rains[h_idx] if h_idx < len(d_rains) else ""
-                    m = re.search(r'(\d+(?:\.\d+)?)', r_text)
-                    day_rain_sum += float(m.group(1)) if m else 0.0
+                    day_rain_sum += _parse_rain_val(r_text)
 
                     ic = d_icons[h_idx] if h_idx < len(d_icons) else ""
-                    if "1_" in ic or "1." in ic: c = 5.0
-                    elif "2_" in ic or "2." in ic: c = 20.0
-                    elif "3_" in ic or "3." in ic: c = 50.0
-                    elif "4_" in ic or "4." in ic: c = 75.0
-                    elif "5_" in ic or "5." in ic: c = 95.0
-                    elif "18" in ic or "19" in ic: c = 85.0
-                    else: c = 20.0
-                    day_clouds.append(c)
+                    day_clouds.append(_parse_cloud_val(ic))
 
             avg_cloud = round(sum(day_clouds) / len(day_clouds)) if day_clouds else 20.0
             day_rain_sum = round(day_rain_sum, 1)
@@ -685,9 +705,19 @@ async def run_automation(
         )
         await context.add_init_script(r'''
             try {
-                window.localStorage.setItem('settings_consent', 'true');
+                window.localStorage.setItem('settings_consent', JSON.stringify({
+                    version: "2023/11",
+                    timestamp: Date.now(),
+                    analytics: true,
+                    explicit: true
+                }));
                 window.localStorage.setItem('settings_consent_ts', Date.now().toString());
                 window.localStorage.setItem('settings_analyticsConsentRequired', 'false');
+                window.localStorage.setItem('settings_defaultUnits', '"metric"');
+                window.localStorage.setItem('settings_country', '"in"');
+                window.localStorage.setItem('metric_rain', '"mm"');
+                window.localStorage.setItem('metric_temp', '"°C"');
+                window.localStorage.setItem('metric_wind', '"kt"');
             } catch(e) {}
         ''')
         page = await context.new_page()

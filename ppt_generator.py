@@ -36,32 +36,44 @@ def _fmt_num(val, unit: str = "") -> str:
         return f"{round(val, 1)}{unit}"
     return f"{val}{unit}"
 
-def _update_slide_title(slide, title_text: str):
-    """Update title heading without altering shape position or layout."""
+def _update_slide_title(slide, title_text: str, font_size_pt: Optional[float] = None):
+    """Update title heading within the red banner without altering shape position or layout."""
+    if font_size_pt is None:
+        font_size_pt = 16.0 if len(title_text) > 30 else 22.0
+
     for shape in slide.shapes:
         if shape.has_text_frame and ("WX UPDATE" in shape.text_frame.text or "IMD" in shape.text_frame.text):
             tf = shape.text_frame
+            tf.word_wrap = False
             for para in tf.paragraphs:
-                if "WX UPDATE" in para.text or "IMD" in para.text:
-                    para.text = title_text
-                    if para.runs:
-                        r = para.runs[0]
-                        r.font.name = "Arial"
-                        r.font.size = Pt(22)
-                        r.font.bold = True
-                        r.font.underline = True
-                        r.font.color.rgb = RGBColor(0x1B, 0x36, 0x5D)
+                para.text = title_text
+                para.alignment = PP_ALIGN.CENTER
+                if para.runs:
+                    r = para.runs[0]
+                    r.font.name = "Arial"
+                    r.font.size = Pt(font_size_pt)
+                    r.font.bold = True
+                    r.font.underline = True
+                    r.font.color.rgb = RGBColor(0x1B, 0x36, 0x5D)
             return
-    # If no matching title box, create one
-    txb = slide.shapes.add_textbox(Inches(0.5), Inches(0.08), Inches(9.0), Inches(0.5))
-    p = txb.text_frame.paragraphs[0]
+
+    # If no matching title banner exists, create full-width red banner rectangle matching template
+    banner = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, Inches(10.0), Inches(0.6))
+    banner.fill.solid()
+    banner.fill.fore_color.rgb = RGBColor(0xFF, 0x00, 0x00)
+    banner.line.fill.background()
+    tf = banner.text_frame
+    tf.word_wrap = False
+    p = tf.paragraphs[0]
     p.text = title_text
+    p.alignment = PP_ALIGN.CENTER
     r = p.runs[0] if p.runs else p.add_run()
     r.font.name = "Arial"
-    r.font.size = Pt(22)
+    r.font.size = Pt(font_size_pt)
     r.font.bold = True
     r.font.underline = True
     r.font.color.rgb = RGBColor(0x1B, 0x36, 0x5D)
+
 
 def _fill_2line_cell(cell, top_text: str, bottom_text: str, font_size_pt: float = 12.0):
     """Fill a clean two-line cell (Windy on line 1, Accuwx on line 2) with compact spacing."""
@@ -294,22 +306,19 @@ def _add_imd_legend(slide):
             p.font.color.rgb = col
             p.alignment = PP_ALIGN.CENTER
 
-def _create_imd_slide(prs, template_imd_slide, state_name: str, date_str: str, image_path: Optional[str], available: bool):
-    """Creates an IMD slide for a specific state and date with full-size centered map and horizontal legend."""
-    slide_layout = template_imd_slide.slide_layout
-    new_slide = prs.slides.add_slide(slide_layout)
+def _create_imd_slide(prs, template_imd_slide, template_table_slide, state_name: str, date_str: str, image_path: Optional[str], available: bool):
+    """Creates an IMD slide for a specific state and date with full-size centered map, red header banner, and horizontal legend."""
+    blank_layout = prs.slide_layouts[10] if len(prs.slide_layouts) > 10 else template_imd_slide.slide_layout
+    new_slide = prs.slides.add_slide(blank_layout)
 
-    # Copy shapes from template_imd_slide (banner, etc.)
-    for shp in template_imd_slide.shapes:
-        if shp.shape_type == pptx.enum.shapes.MSO_SHAPE_TYPE.PICTURE:
-            continue
-        if shp.has_text_frame and ("WX UPDATE" in shp.text_frame.text or "NASHIK" in shp.text_frame.text or "PUNE" in shp.text_frame.text or "MUMBAI" in shp.text_frame.text or "AURANGABAD" in shp.text_frame.text or "AHMEDNAGAR" in shp.text_frame.text):
-            continue
-        new_slide.shapes._spTree.append(copy.deepcopy(shp._element))
+    # 1. Add top red banner (copy from template_table_slide.shapes[0] which is the red banner)
+    if template_table_slide and len(template_table_slide.shapes) > 0:
+        banner_elem = copy.deepcopy(template_table_slide.shapes[0]._element)
+        new_slide.shapes._spTree.append(banner_elem)
 
-    # Add Title Box
+    # 2. Add Title on red banner
     title_text = f"IMD DISTRICT-WISE WARNING — {state_name.upper()} ({date_str})"
-    _update_slide_title(new_slide, title_text)
+    _update_slide_title(new_slide, title_text, font_size_pt=16.0)
 
     # Place Map image or "DATA NOT AVAILABLE" message centered
     if available and image_path and os.path.exists(image_path) and os.path.getsize(image_path) > 5000:
@@ -431,7 +440,7 @@ def generate_ppt(date_str_or_job: Any, weather_data: Optional[list] = None, imd_
             st_name = imd_item["state"]
             img_p = imd_item.get("image_path")
             is_avail = imd_item.get("available", True)
-            _create_imd_slide(prs, template_imd_slide, st_name, d_str, img_p, is_avail)
+            _create_imd_slide(prs, template_imd_slide, template_table_slide, st_name, d_str, img_p, is_avail)
 
     # Now remove template_imd_slide (slide index 2 in original) so there are no orphan template slides
     slide_id_list = prs.slides._sldIdLst
