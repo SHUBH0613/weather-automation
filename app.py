@@ -164,9 +164,10 @@ def status():
 @app.route("/version")
 def version():
     return jsonify({
-        "version": "v2.2-stable",
+        "version": "v2.3-accu-windy-pure",
         "features": [
-            "Guaranteed Weather Baseline (Open-Meteo)",
+            "Pure AccuWeather Direct Engine (curl-cffi)",
+            "Pure Windy Live Forecast & WebGL Interpolator",
             "Dynamic IMD GIS Warning Maps",
             "Multi-City & Multi-Day Date Range",
             "Anti-Overlap Slide 2 Layout Engine"

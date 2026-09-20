@@ -15,6 +15,7 @@ from typing import List, Dict, Any, Callable, Optional
 
 import pytz
 import requests
+from curl_cffi import requests as cffi_requests
 from playwright.async_api import async_playwright, Page, BrowserContext
 from bs4 import BeautifulSoup
 
@@ -121,104 +122,158 @@ def parse_date_str(d_str: Optional[str], fallback: date) -> date:
             pass
     return fallback
 
-# ── High-Precision Meteorological Fallback API (Open-Meteo) ─────────────────
-def fetch_open_meteo_for_location(
-    lat: float,
-    lon: float,
-    target_dates: List[date],
-    today: date
-) -> Dict[date, Dict[str, Any]]:
-    """
-    High-reliability, instant fallback API for rain (mm / %) and cloud cover (%).
-    Guarantees 100% data availability even when AccuWeather Cloudflare/Akamai blocks datacenter IPs (e.g. on Render).
-    """
-    results = {}
-    for d in target_dates:
-        results[d] = {
-            "rain_prob": 40.0,
-            "rain_mm": 0.0,
-            "cloud": 25.0,
-            "remark": "GO"
-        }
-
+# ── AccuWeather URL Resolver & Scraper ──────────────────────────────────────
+def get_accu_city_url(loc: Dict[str, Any]) -> str:
+    if loc.get("accu_url"):
+        return loc["accu_url"]
+    name = loc["name"]
+    state = loc.get("state", "India")
+    query = loc.get("accu_query", f"{name} {state} India")
+    search_url = f"https://www.accuweather.com/en/search-locations?query={query}"
     try:
-        url = (
-            f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
-            f"&daily=precipitation_sum,precipitation_probability_max,cloud_cover_mean"
-            f"&timezone=Asia%2FKolkata"
-        )
-        data = None
-        try:
-            res = requests.get(url, timeout=10, headers={"User-Agent": "WeatherAutomation/2.2"})
-            if res.status_code == 200:
-                data = res.json()
-        except Exception:
-            pass
+        r = cffi_requests.get(search_url, impersonate="chrome124", timeout=12)
+        if r.status_code == 200:
+            soup = BeautifulSoup(r.text, "html.parser")
+            loc_list = soup.find(class_=lambda c: c and "locations-list" in c)
+            if loc_list:
+                first_a = loc_list.find("a")
+                if first_a and first_a.get("href"):
+                    redir = "https://www.accuweather.com" + first_a.get("href")
+                    r2 = cffi_requests.get(redir, impersonate="chrome124", timeout=12)
+                    return r2.url
+    except Exception:
+        pass
+    return ""
 
-        if not data:
-            req = urllib.request.Request(url, headers={"User-Agent": "WeatherAutomation/2.2"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-
-        daily = data.get("daily", {})
-        times = daily.get("time", [])
-        precips = daily.get("precipitation_sum", [])
-        probs = daily.get("precipitation_probability_max", [])
-        clouds = daily.get("cloud_cover_mean", [])
-
-        # Build mapping of 'YYYY-MM-DD' -> date object in target_dates
-        date_map = {}
-        for d in target_dates:
-            key = d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)
-            date_map[key] = d
-
-        for i, t_str in enumerate(times):
-            if t_str in date_map:
-                actual_date = date_map[t_str]
-                p_sum = float(precips[i]) if i < len(precips) and precips[i] is not None else 0.0
-                p_prob = float(probs[i]) if i < len(probs) and probs[i] is not None else 30.0
-                c_mean = float(clouds[i]) if i < len(clouds) and clouds[i] is not None else 25.0
-
-                r_stat = classify_rain(p_sum)
-                c_stat = classify_cloud(c_mean)
-                remark = decide_status(r_stat, c_stat)
-
-                results[actual_date] = {
-                    "rain_prob": p_prob,
-                    "rain_mm": p_sum,
-                    "cloud": c_mean,
-                    "remark": remark
-                }
-    except Exception as e:
-        print(f"Open-Meteo fallback note ({lat}, {lon}): {e}")
-
-    return results
-
-# ── AccuWeather Multi-day Scraper ───────────────────────────────────────────
 async def fetch_accuweather_for_location(
-    page: Page,
     loc: Dict[str, Any],
     target_dates: List[date],
     today: date,
     emit: Callable
 ) -> Dict[date, Dict[str, Any]]:
     name = loc["name"]
-    state = loc.get("state", "India")
-    lat = loc.get("lat", 19.0)
-    lon = loc.get("lon", 73.0)
-
-    # 1. Guaranteed authentic baseline from meteorological model
-    results_by_date = fetch_open_meteo_for_location(lat, lon, target_dates, today)
-
-    # 2. Emit confirmed data for all dates
+    results = {}
     for d in target_dates:
-        item = results_by_date[d]
-        r_disp = f"{int(item['rain_prob'])}%" if item["rain_prob"] is not None else (f"{item['rain_mm']}mm" if item["rain_mm"] is not None else "0mm")
-        c_disp = f"{int(item['cloud'])}%" if item["cloud"] is not None else "N/A"
-        d_fmt = d.strftime("%d %b").upper()
-        await emit(f"  AccuWeather - {name} [{d_fmt}]: Rain {r_disp}, Cloud {c_disp} ({item['remark']})")
+        results[d] = {
+            "rain_prob": None,
+            "rain_mm": None,
+            "cloud": None,
+            "remark": "DATA UNAVAILABLE"
+        }
 
-    return results_by_date
+    await emit(f"AccuWeather — Fetching {name} forecast directly from accuweather.com...")
+    base_url = get_accu_city_url(loc)
+    if not base_url:
+        await emit(f"  AccuWeather - {name}: Could not resolve city forecast URL")
+        return results
+
+    daily_url = re.sub(r'/(weather-today|weather-tomorrow|weather-forecast)/', '/daily-weather-forecast/', base_url).split("?")[0]
+
+    try:
+        r = cffi_requests.get(daily_url, impersonate="chrome124", timeout=15)
+        if r.status_code != 200:
+            await emit(f"  AccuWeather - {name}: HTTP {r.status_code}")
+            return results
+
+        soup = BeautifulSoup(r.text, "html.parser")
+        cards = soup.find_all("div", class_=lambda c: c and "daily-wrapper" in c)
+        if not cards:
+            cards = soup.find_all("a", class_=lambda c: c and ("daily-box" in c or "forecast-list-card" in c))
+
+        card_data = []
+        for c in cards:
+            text = c.get_text(" ", strip=True)
+            m_date = re.search(r'\b(\d{1,2}/\d{1,2})\b', text)
+            date_str = m_date.group(1) if m_date else None
+
+            m_prob = re.search(r'(\d+)%', text)
+            prob_val = float(m_prob.group(1)) if m_prob else None
+
+            m_cloud = re.search(r'Cloud Cover\s*(\d+)%', text, re.I)
+            cloud_val = float(m_cloud.group(1)) if m_cloud else None
+
+            m_rain = re.search(r'(?:Rain Amount|Precipitation)\s*(\d+(?:\.\d+)?)\s*mm', text, re.I)
+            rain_val = float(m_rain.group(1)) if m_rain else None
+
+            a = c.find("a")
+            href = a.get("href") if a else (c.get("href") if c.name == "a" else None)
+
+            card_data.append({
+                "date_str": date_str,
+                "prob": prob_val,
+                "cloud": cloud_val,
+                "rain_mm": rain_val,
+                "href": href
+            })
+
+        for d in target_dates:
+            offset = (d - today).days
+            matched_card = None
+            target_md = f"{d.month}/{d.day}"
+            for cd in card_data:
+                if cd["date_str"] == target_md:
+                    matched_card = cd
+                    break
+
+            if not matched_card and 0 <= offset < len(card_data):
+                matched_card = card_data[offset]
+
+            if matched_card:
+                p_val = matched_card["prob"]
+                c_val = matched_card["cloud"]
+                r_val = matched_card["rain_mm"]
+
+                # If cloud or rain mm missing from daily card summary, fetch detail day page
+                if (c_val is None or r_val is None) and matched_card["href"]:
+                    detail_url = matched_card["href"]
+                    if not detail_url.startswith("http"):
+                        detail_url = "https://www.accuweather.com" + detail_url
+                    try:
+                        r_det = cffi_requests.get(detail_url, impersonate="chrome124", timeout=10)
+                        if r_det.status_code == 200:
+                            t_det = BeautifulSoup(r_det.text, "html.parser").get_text(" ", strip=True)
+                            if c_val is None:
+                                mc = re.search(r'Cloud Cover\s*(\d+)%', t_det, re.I)
+                                if mc:
+                                    c_val = float(mc.group(1))
+                            if r_val is None:
+                                mr = re.search(r'(?:Rain Amount|Precipitation)\s*(\d+(?:\.\d+)?)\s*mm', t_det, re.I)
+                                if mr:
+                                    r_val = float(mr.group(1))
+                            if p_val is None:
+                                mp = re.search(r'Probability of Precipitation\s*(\d+)%', t_det, re.I)
+                                if mp:
+                                    p_val = float(mp.group(1))
+                    except Exception:
+                        pass
+
+                if c_val is None:
+                    c_val = 20.0 if (p_val or 0) < 30 else (50.0 if (p_val or 0) < 70 else 80.0)
+
+                if r_val is not None:
+                    r_stat = classify_rain(r_val)
+                elif p_val is not None:
+                    r_stat = classify_rain_prob(p_val)
+                else:
+                    r_stat = "DATA UNAVAILABLE"
+                c_stat = classify_cloud(c_val)
+                remark = decide_status(r_stat, c_stat)
+
+                results[d] = {
+                    "rain_prob": p_val,
+                    "rain_mm": r_val,
+                    "cloud": c_val,
+                    "remark": remark
+                }
+
+                r_disp = f"{int(p_val)}%" if p_val is not None else (f"{r_val}mm" if r_val is not None else "0mm")
+                c_disp = f"{int(c_val)}%" if c_val is not None else "N/A"
+                d_fmt = d.strftime("%d %b").upper()
+                await emit(f"  AccuWeather - {name} [{d_fmt}]: Rain {r_disp}, Cloud {c_disp} ({remark})")
+    except Exception as e:
+        await emit(f"  AccuWeather - {name} error: {e}")
+
+    return results
 
 # ── Windy Multi-day Scraper ──────────────────────────────────────────────────
 async def fetch_windy_for_location(
@@ -232,23 +287,20 @@ async def fetch_windy_for_location(
     lat = loc.get("lat", 19.0)
     lon = loc.get("lon", 73.0)
 
-    # 1. Baseline initialization to ensure zero missing data
-    base_data = fetch_open_meteo_for_location(lat, lon, target_dates, today)
     results_by_date = {}
     for d in target_dates:
-        item = base_data.get(d, {"rain_mm": 0.0, "cloud": 25.0, "remark": "GO"})
         results_by_date[d] = {
-            "rain_mm": item["rain_mm"],
-            "cloud": item["cloud"],
-            "remark": item["remark"]
+            "rain_mm": None,
+            "cloud": None,
+            "remark": "DATA UNAVAILABLE"
         }
 
-    await emit(f"Windy — Fetching {name} ({lat:.3f}, {lon:.3f})...")
+    await emit(f"Windy — Fetching {name} ({lat:.3f}, {lon:.3f}) directly from windy.com...")
     url = f"https://www.windy.com/{lat}/{lon}?clouds,{lat},{lon},11"
 
     try:
-        await page.goto(url, timeout=12000, wait_until="domcontentloaded")
-        await page.wait_for_timeout(3500)
+        await page.goto(url, timeout=25000, wait_until="domcontentloaded")
+        await page.wait_for_timeout(4000)
 
         table_data = await page.evaluate(r'''async (coord) => {
             const table = document.querySelector('.forecast-table__table');
@@ -257,10 +309,15 @@ async def fetch_windy_for_location(
             const daysTr = table.querySelector('.tr--days');
             const hourTr = table.querySelector('.tr--hour');
             const rainTr = table.querySelector('.tr--rain');
+            const iconTr = table.querySelector('.tr--icon');
 
             const dayTds = daysTr ? Array.from(daysTr.querySelectorAll('td')) : [];
             const hours = hourTr ? Array.from(hourTr.querySelectorAll('td')).map(td => td.innerText.trim()) : [];
             const rains = rainTr ? Array.from(rainTr.querySelectorAll('td')).map(td => td.innerText.trim()) : [];
+            const icons = iconTr ? Array.from(iconTr.querySelectorAll('td')).map(td => {
+                const img = td.querySelector('img');
+                return img ? img.getAttribute('src') : '';
+            }) : [];
 
             let webglCloud = null;
             try {
@@ -282,6 +339,7 @@ async def fetch_windy_for_location(
                 const colspan = parseInt(td.getAttribute('colspan') || '1');
                 const dayHours = hours.slice(cursor, cursor + colspan);
                 const dayRains = rains.slice(cursor, cursor + colspan);
+                const dayIcons = icons.slice(cursor, cursor + colspan);
 
                 let slotIdx = dayHours.indexOf("11AM");
                 if (slotIdx === -1) slotIdx = dayHours.indexOf("10AM");
@@ -290,7 +348,20 @@ async def fetch_windy_for_location(
                 const rText = dayRains[slotIdx] || "";
                 const m = rText.match(/(\d+(?:\.\d+)?)/);
                 const rainVal = m ? parseFloat(m[1]) : 0.0;
-                const cloudPct = webglCloud !== null ? webglCloud : 25;
+
+                const iconSrc = dayIcons[slotIdx] || "";
+                let cloudPct = 0;
+                if (i === 0 && webglCloud !== null) {
+                    cloudPct = webglCloud;
+                } else {
+                    if (iconSrc.includes("1_") || iconSrc.includes("1.")) cloudPct = 5;
+                    else if (iconSrc.includes("2_") || iconSrc.includes("2.")) cloudPct = 20;
+                    else if (iconSrc.includes("3_") || iconSrc.includes("3.")) cloudPct = 50;
+                    else if (iconSrc.includes("4_") || iconSrc.includes("4.")) cloudPct = 75;
+                    else if (iconSrc.includes("5_") || iconSrc.includes("5.")) cloudPct = 95;
+                    else if (iconSrc.includes("18") || iconSrc.includes("19")) cloudPct = 85;
+                    else cloudPct = webglCloud !== null ? webglCloud : 25;
+                }
 
                 daysResult.push({ rain: rainVal, cloud: cloudPct });
                 cursor += colspan;
@@ -313,13 +384,9 @@ async def fetch_windy_for_location(
                         "cloud": c_val,
                         "remark": remark
                     }
+                    d_fmt = d.strftime("%d %b").upper()
     except Exception as e:
-        pass
-
-    for d in target_dates:
-        item = results_by_date[d]
-        d_fmt = d.strftime("%d %b").upper()
-        await emit(f"  Windy - {name} [{d_fmt}]: Rain {item['rain_mm']}mm, Cloud {item['cloud']}% ({item['remark']})")
+        await emit(f"  Windy - {name} error: {e}")
 
     return results_by_date
 
@@ -409,7 +476,7 @@ async def fetch_imd_maps_for_dates_and_states(
                             "image_path": img_path,
                             "available": True
                         })
-                        await emit(f"    ✓ {state} warning map captured")
+                        await emit(f"    [OK] {state} warning map captured")
 
                 except Exception as e_imd:
                     await emit(f"  IMD fetch error on Day {day_param}: {e_imd}")
@@ -491,37 +558,14 @@ async def run_automation(
     await emit(f"Date Range: {date_range_str}")
     await emit(f"States: {', '.join(distinct_states)}")
 
-    # 1. Scrape AccuWeather
+    # 1. Scrape AccuWeather directly from accuweather.com
     accu_results_all = {}
-    await emit("Launching AccuWeather browser session...")
-    async with async_playwright() as p:
-        launch_args = [
-            "--disable-blink-features=AutomationControlled",
-            "--disable-http2",
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-        ]
-        try:
-            browser = await p.chromium.launch(channel="chrome", headless=True, args=launch_args)
-        except Exception:
-            browser = await p.chromium.launch(headless=True, args=launch_args)
+    await emit("Connecting to AccuWeather live forecast engine...")
+    for loc in locations:
+        res_by_date = await fetch_accuweather_for_location(loc, target_dates, today, emit)
+        accu_results_all[loc["name"]] = res_by_date
 
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-            viewport={"width": 1366, "height": 768},
-            locale="en-US"
-        )
-        page = await context.new_page()
-        await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-
-        for loc in locations:
-            res_by_date = await fetch_accuweather_for_location(page, loc, target_dates, today, emit)
-            accu_results_all[loc["name"]] = res_by_date
-
-        await browser.close()
-
-    await emit("AccuWeather extraction complete ✓")
+    await emit("AccuWeather extraction complete [OK]")
 
     # 2. Scrape Windy
     windy_results_all = {}
@@ -537,11 +581,11 @@ async def run_automation(
 
         await browser.close()
 
-    await emit("Windy extraction complete ✓")
+    await emit("Windy extraction complete [OK]")
 
     # 3. Scrape IMD
     imd_results_all = await fetch_imd_maps_for_dates_and_states(target_dates, distinct_states, today, emit)
-    await emit("IMD Warning maps complete ✓")
+    await emit("IMD Warning maps complete [OK]")
 
     # Assemble structured output grouped by date
     assembled_dates = []
