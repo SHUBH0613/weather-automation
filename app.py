@@ -161,7 +161,21 @@ def status():
             "error": _job_state["error"]
         })
 
+@app.route("/version")
+def version():
+    return jsonify({
+        "version": "v2.2-stable",
+        "features": [
+            "Guaranteed Weather Baseline (Open-Meteo)",
+            "Dynamic IMD GIS Warning Maps",
+            "Multi-City & Multi-Day Date Range",
+            "Anti-Overlap Slide 2 Layout Engine"
+        ],
+        "status": "ready"
+    })
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"Starting server on http://0.0.0.0:{port}")
     app.run(host="0.0.0.0", port=port, debug=False)
+
