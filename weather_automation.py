@@ -311,7 +311,7 @@ async def fetch_accuweather_for_location(
 
 # ── Windy Multi-day Scraper ──────────────────────────────────────────────────
 async def fetch_windy_for_location(
-    page: Page,
+    context: BrowserContext,
     loc: Dict[str, Any],
     target_dates: List[date],
     today: date,
@@ -335,12 +335,11 @@ async def fetch_windy_for_location(
 
     table_data = None
     for attempt in range(1, 3):
+        page = await context.new_page()
         try:
-            await page.goto(url, timeout=22000, wait_until="commit")
-            try:
-                await page.wait_for_selector(".forecast-table__table", timeout=12000)
-            except Exception:
-                await page.wait_for_timeout(3000)
+            await page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            await page.wait_for_selector(".forecast-table__table", timeout=15000)
+            await page.wait_for_timeout(2000)
 
             # Dismiss any consent dialog / cookies if present
             try:
@@ -378,7 +377,9 @@ async def fetch_windy_for_location(
                 break
         except Exception as e_att:
             if attempt == 1:
-                await page.wait_for_timeout(2000)
+                await asyncio.sleep(2)
+        finally:
+            await page.close()
 
     if table_data and table_data.get("dayTds"):
         day_tds = table_data["dayTds"]
@@ -489,6 +490,8 @@ async def fetch_imd_maps_for_dates_and_states(
             args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
         )
         context = await browser.new_context(
+            timezone_id="Asia/Kolkata",
+            locale="en-IN",
             viewport={"width": 1280, "height": 800},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
         )
@@ -658,20 +661,18 @@ async def run_automation(
                 "--disable-dev-shm-usage"
             ]
         )
-        context = await browser.new_context(viewport={"width": 1366, "height": 768})
-        page = await context.new_page()
-
-        # Warm up Windy homepage so WebGL and tile cache are hot before querying cities
-        try:
-            await page.goto("https://www.windy.com", timeout=15000, wait_until="commit")
-            await page.wait_for_timeout(1200)
-        except Exception:
-            pass
+        context = await browser.new_context(
+            timezone_id="Asia/Kolkata",
+            locale="en-IN",
+            viewport={"width": 1366, "height": 768},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        )
 
         for loc in locations:
-            res_by_date = await fetch_windy_for_location(page, loc, target_dates, today, emit)
+            res_by_date = await fetch_windy_for_location(context, loc, target_dates, today, emit)
             windy_results_all[loc["name"]] = res_by_date
 
+        await context.close()
         await browser.close()
 
     await emit("Windy extraction complete [OK]")

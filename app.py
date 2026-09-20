@@ -60,6 +60,7 @@ def _finish(ppt_path: str = None, error: str = None):
 def _run_in_thread(locations=None, start_date=None, end_date=None):
     async def _async_job():
         async def emit(msg: str):
+            print(f"[Worker] {msg}", flush=True)
             _push(msg)
 
         try:
