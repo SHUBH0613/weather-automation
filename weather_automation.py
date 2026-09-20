@@ -311,7 +311,7 @@ async def fetch_accuweather_for_location(
 
 # ── Windy Multi-day Scraper ──────────────────────────────────────────────────
 async def fetch_windy_for_location(
-    context: BrowserContext,
+    page: Page,
     loc: Dict[str, Any],
     target_dates: List[date],
     today: date,
@@ -335,10 +335,18 @@ async def fetch_windy_for_location(
 
     table_data = None
     for attempt in range(1, 3):
-        page = await context.new_page()
         try:
+            # Delete prior table from DOM so wait_for_selector only matches the fresh table for THIS location
+            try:
+                await page.evaluate(r'''() => {
+                    const t = document.querySelector('.forecast-table__table');
+                    if (t) t.remove();
+                }''')
+            except Exception:
+                pass
+
             await page.goto(url, timeout=25000, wait_until="commit")
-            await page.wait_for_selector(".forecast-table__table", timeout=15000)
+            await page.wait_for_selector(".forecast-table__table", timeout=20000)
             await page.wait_for_timeout(1500)
 
             # Dismiss any consent dialog / cookies if present
@@ -379,8 +387,6 @@ async def fetch_windy_for_location(
             await emit(f"  Windy - {name} attempt {attempt} error: {e_att}")
             if attempt == 1:
                 await asyncio.sleep(2)
-        finally:
-            await page.close()
 
     if table_data and table_data.get("dayTds"):
         day_tds = table_data["dayTds"]
@@ -668,11 +674,13 @@ async def run_automation(
             viewport={"width": 1366, "height": 768},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         )
+        page = await context.new_page()
 
         for loc in locations:
-            res_by_date = await fetch_windy_for_location(context, loc, target_dates, today, emit)
+            res_by_date = await fetch_windy_for_location(page, loc, target_dates, today, emit)
             windy_results_all[loc["name"]] = res_by_date
 
+        await page.close()
         await context.close()
         await browser.close()
 
