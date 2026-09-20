@@ -337,9 +337,9 @@ async def fetch_windy_for_location(
     for attempt in range(1, 3):
         page = await context.new_page()
         try:
-            await page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            await page.goto(url, timeout=25000, wait_until="commit")
             await page.wait_for_selector(".forecast-table__table", timeout=15000)
-            await page.wait_for_timeout(2000)
+            await page.wait_for_timeout(1500)
 
             # Dismiss any consent dialog / cookies if present
             try:
@@ -376,6 +376,7 @@ async def fetch_windy_for_location(
             if table_data and table_data.get("dayTds"):
                 break
         except Exception as e_att:
+            await emit(f"  Windy - {name} attempt {attempt} error: {e_att}")
             if attempt == 1:
                 await asyncio.sleep(2)
         finally:
