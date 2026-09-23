@@ -364,21 +364,22 @@ async def fetch_windy_for_location(
             except Exception:
                 pass
 
-            # Explicitly select ECMWF model in the bottom forecast bar
+            # Explicitly select ECMWF model in the bottom forecast bar (unconditional click to force detail table to ECMWF)
             try:
                 switched = await page.evaluate(r'''() => {
                     const items = Array.from(document.querySelectorAll('.switch__item, a, button'));
                     const ecmwf = items.find(el => el.innerText && el.innerText.trim().startsWith('ECMWF'));
-                    if (ecmwf && !ecmwf.classList.contains('selected')) {
+                    if (ecmwf) {
                         ecmwf.click();
                         return true;
                     }
                     return false;
                 }''')
                 if switched:
-                    await page.wait_for_timeout(1200)
+                    await page.wait_for_timeout(1500)
             except Exception:
                 pass
+
 
 
             table_data = await page.evaluate(r'''() => {
