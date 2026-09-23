@@ -42,6 +42,11 @@ def add_cors_headers(response):
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, Cache-Control"
     return response
 
+@app.route("/ping")
+def ping():
+    """Ultra-lightweight keep-alive endpoint — no DB, no lock, instant 200."""
+    return "pong", 200
+
 @app.route("/get-data", methods=["OPTIONS"])
 def get_data_options():
     return "", 204

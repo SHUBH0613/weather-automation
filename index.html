@@ -384,6 +384,30 @@
     }
     #build-label { font-variant-numeric: tabular-nums; }
 
+    /* ── Cold-start banner ── */
+    #wake-banner {
+      display: none;
+      margin-bottom: 16px;
+      background: rgba(245,158,11,0.08);
+      border: 1px solid rgba(245,158,11,0.25);
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 12px;
+      color: #fcd34d;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #wake-banner.hidden { display: none !important; }
+    .wake-spin {
+      width: 13px; height: 13px;
+      border: 2px solid rgba(252,211,77,0.3);
+      border-top-color: #fcd34d;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+
 
     /* ── Countdown Timer ── */
     #timer-bar {
@@ -429,6 +453,13 @@
 
 <div class="card">
   <span class="dev-credit">Developed by शुभ</span>
+
+  <!-- Cold-start banner: shown while server is waking from Render sleep -->
+  <div id="wake-banner" class="hidden">
+    <span class="wake-spin"></span>
+    <span id="wake-msg">Server is waking up from sleep — ready in ~30s…</span>
+  </div>
+
   <div class="header">
     <div class="badge"><span class="dot"></span> Weather Forecast Automation &middot; AI</div>
     <h1>Weather Intelligence<br>Automation</h1>
@@ -860,40 +891,101 @@
 
   function downloadFile() { window.location.href = `${API_BASE}/download`; }
 
+  // ── Keep-alive ping (prevents Render from sleeping while tab is open) ────────
+  // Render free tier sleeps after 15 min inactivity. Ping every 8 min to stay warm.
+  setInterval(() => {
+    fetch(`${API_BASE}/ping`).catch(() => {});
+  }, 8 * 60 * 1000);
+
   // ── On page load ─────────────────────────────────────────────────────────────
-  // If a job is already running (user refreshed mid-job), reconnect SSE + restart timer
   window.addEventListener('DOMContentLoaded', () => {
     initDates();
     renderChips();
-    fetch(`${API_BASE}/status`)
-      .then(r => r.json())
-      .then(s => {
-        // Show build info
-        const buildEl = document.getElementById('build-label');
-        if (buildEl && s.build) buildEl.textContent = `Build ${s.build}`;
 
+    const wakeBanner = document.getElementById('wake-banner');
+    const wakeMsg    = document.getElementById('wake-msg');
+    const buildEl    = document.getElementById('build-label');
+
+    // Cold-start detection: measure how long /status takes to respond.
+    // If > 2.5s the server was sleeping → show the wake-up banner until it's ready.
+    const t0 = Date.now();
+    let wakeCheckInterval = null;
+
+    function checkServerReady() {
+      fetch(`${API_BASE}/status`)
+        .then(r => r.json())
+        .then(s => {
+          const elapsed = Date.now() - t0;
+
+          // Populate build info
+          if (buildEl && s.build) buildEl.textContent = `Build ${s.build}`;
+
+          // Server responded — hide banner
+          if (wakeBanner) wakeBanner.classList.add('hidden');
+          if (wakeCheckInterval) { clearInterval(wakeCheckInterval); wakeCheckInterval = null; }
+
+          if (s.ppt_path && !s.running) {
+            const fname = s.ppt_path.split(/[\\\/]/).pop();
+            jobDone(fname);
+          } else if (s.running) {
+            btnGet.disabled       = true;
+            spinner.style.display = 'block';
+            btnLabel.textContent  = 'Automating…';
+            panel.style.display   = 'block';
+            addLog('Reconnected to running job…', 'info');
+            const eta = calcEta();
+            startTimer(eta);
+            startPolling();
+            connectSSE();
+          }
+        })
+        .catch(() => {
+          // Server not yet responding — it's waking up
+          if (wakeBanner) {
+            wakeBanner.classList.remove('hidden');
+            const elapsed = Math.round((Date.now() - t0) / 1000);
+            if (wakeMsg) wakeMsg.textContent = `Server is waking up from sleep — ${elapsed}s elapsed, ready soon…`;
+          }
+          if (buildEl) buildEl.textContent = 'Server starting up…';
+        });
+    }
+
+    // First check immediately
+    const firstCheck = fetch(`${API_BASE}/status`)
+      .then(r => {
+        const elapsed = Date.now() - t0;
+        if (elapsed > 2500 && wakeBanner) {
+          // Slow first response — was a cold start
+          wakeBanner.classList.remove('hidden');
+          if (wakeMsg) wakeMsg.textContent = 'Server woke from sleep — initialising…';
+          setTimeout(() => wakeBanner.classList.add('hidden'), 3000);
+        }
+        return r.json();
+      })
+      .then(s => {
+        if (buildEl && s.build) buildEl.textContent = `Build ${s.build}`;
         if (s.ppt_path && !s.running) {
-          // Previous job finished — show download
           const fname = s.ppt_path.split(/[\\\/]/).pop();
           jobDone(fname);
         } else if (s.running) {
-          // Job in progress (user refreshed) — reconnect SSE and show timer
           btnGet.disabled       = true;
           spinner.style.display = 'block';
           btnLabel.textContent  = 'Automating…';
           panel.style.display   = 'block';
           addLog('Reconnected to running job…', 'info');
-          const eta = calcEta();
-          startTimer(eta);
+          startTimer(calcEta());
           startPolling();
           connectSSE();
         }
       })
       .catch(() => {
-        const buildEl = document.getElementById('build-label');
-        if (buildEl) buildEl.textContent = 'Build info unavailable';
+        // Server completely down / cold start — show banner and retry every 4s
+        if (wakeBanner) wakeBanner.classList.remove('hidden');
+        if (buildEl) buildEl.textContent = 'Server starting up…';
+        wakeCheckInterval = setInterval(checkServerReady, 4000);
       });
   });
+
 
 </script>
 
