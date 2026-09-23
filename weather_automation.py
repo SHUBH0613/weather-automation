@@ -353,7 +353,7 @@ async def fetch_windy_for_location(
             except Exception:
                 await page.wait_for_timeout(3000)
 
-            await page.wait_for_timeout(1500)
+            await page.wait_for_timeout(500)
 
             # Dismiss any consent dialog / cookies if present
             try:
@@ -664,70 +664,86 @@ async def run_automation(
     await emit(f"Date Range: {date_range_str}")
     await emit(f"States: {', '.join(distinct_states)}")
 
-    # 1. Scrape AccuWeather directly from accuweather.com
-    accu_results_all = {}
-    await emit("Connecting to AccuWeather live forecast engine...")
-    for loc in locations:
-        res_by_date = await fetch_accuweather_for_location(loc, target_dates, today, emit)
-        accu_results_all[loc["name"]] = res_by_date
+    # ── Parallel inner jobs ──────────────────────────────────────────────────
+    # AccuWeather (all cities concurrently via gather), Windy browser session,
+    # and IMD GIS maps all run at the same time to cut total runtime ~50%.
 
-    await emit("AccuWeather extraction complete [OK]")
+    async def _run_accu() -> Dict[str, Any]:
+        await emit("AccuWeather — fetching all cities concurrently...")
+        tasks = [
+            fetch_accuweather_for_location(loc, target_dates, today, emit)
+            for loc in locations
+        ]
+        results_list = await asyncio.gather(*tasks, return_exceptions=True)
+        out = {}
+        for loc, res in zip(locations, results_list):
+            if isinstance(res, Exception):
+                await emit(f"  AccuWeather - {loc['name']}: exception {res}")
+                out[loc["name"]] = {d: {"rain_prob": None, "rain_mm": None, "cloud": None, "remark": "DATA UNAVAILABLE"} for d in target_dates}
+            else:
+                out[loc["name"]] = res
+        await emit("AccuWeather extraction complete [OK]")
+        return out
 
-    # 2. Scrape Windy
-    windy_results_all = {}
-    await emit("Launching Windy browser session...")
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--enable-webgl",
-                "--use-gl=swiftshader",
-                "--ignore-gpu-blocklist"
-            ]
-        )
-        context = await browser.new_context(
-            timezone_id="Asia/Kolkata",
-            locale="en-IN",
-            viewport={"width": 1366, "height": 768},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        )
-        await context.add_init_script(r'''
-            try {
-                window.localStorage.setItem('settings_consent', JSON.stringify({
-                    version: "2023/11",
-                    timestamp: Date.now(),
-                    analytics: true,
-                    explicit: true
-                }));
-                window.localStorage.setItem('settings_consent_ts', Date.now().toString());
-                window.localStorage.setItem('settings_analyticsConsentRequired', 'false');
-                window.localStorage.setItem('settings_defaultUnits', '"metric"');
-                window.localStorage.setItem('settings_country', '"in"');
-                window.localStorage.setItem('metric_rain', '"mm"');
-                window.localStorage.setItem('metric_temp', '"°C"');
-                window.localStorage.setItem('metric_wind', '"kt"');
-                window.localStorage.setItem('product', '"ecmwf"');
-            } catch(e) {}
-        ''')
-        page = await context.new_page()
+    async def _run_windy() -> Dict[str, Any]:
+        windy_all = {}
+        await emit("Launching Windy browser session (ECMWF model)...")
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--enable-webgl",
+                    "--use-gl=swiftshader",
+                    "--ignore-gpu-blocklist"
+                ]
+            )
+            context = await browser.new_context(
+                timezone_id="Asia/Kolkata",
+                locale="en-IN",
+                viewport={"width": 1366, "height": 768},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            )
+            await context.add_init_script(r'''
+                try {
+                    window.localStorage.setItem('settings_consent', JSON.stringify({
+                        version: "2023/11",
+                        timestamp: Date.now(),
+                        analytics: true,
+                        explicit: true
+                    }));
+                    window.localStorage.setItem('settings_consent_ts', Date.now().toString());
+                    window.localStorage.setItem('settings_analyticsConsentRequired', 'false');
+                    window.localStorage.setItem('settings_defaultUnits', '"metric"');
+                    window.localStorage.setItem('settings_country', '"in"');
+                    window.localStorage.setItem('metric_rain', '"mm"');
+                    window.localStorage.setItem('metric_temp', '"°C"');
+                    window.localStorage.setItem('metric_wind', '"kt"');
+                    window.localStorage.setItem('product', '"ecmwf"');
+                } catch(e) {}
+            ''')
+            page = await context.new_page()
+            for loc in locations:
+                res_by_date = await fetch_windy_for_location(page, loc, target_dates, today, emit)
+                windy_all[loc["name"]] = res_by_date
+            await page.close()
+            await context.close()
+            await browser.close()
+        await emit("Windy extraction complete [OK]")
+        return windy_all
 
-        for loc in locations:
-            res_by_date = await fetch_windy_for_location(page, loc, target_dates, today, emit)
-            windy_results_all[loc["name"]] = res_by_date
-
-        await page.close()
-        await context.close()
-        await browser.close()
-
-    await emit("Windy extraction complete [OK]")
-
-    # 3. Scrape IMD
-    imd_results_all = await fetch_imd_maps_for_dates_and_states(target_dates, distinct_states, today, emit)
+    # Run AccuWeather, Windy, and IMD concurrently
+    await emit("Launching AccuWeather · Windy · IMD in parallel...")
+    accu_results_all, windy_results_all, imd_results_all = await asyncio.gather(
+        _run_accu(),
+        _run_windy(),
+        fetch_imd_maps_for_dates_and_states(target_dates, distinct_states, today, emit)
+    )
     await emit("IMD Warning maps complete [OK]")
+
 
     # Assemble structured output grouped by date
     assembled_dates = []
