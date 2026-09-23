@@ -351,15 +351,54 @@
 
     #log::-webkit-scrollbar, .chips-container::-webkit-scrollbar { width: 4px; }
     #log::-webkit-scrollbar-thumb, .chips-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* ── Countdown Timer ── */
+    #timer-bar {
+      display: none;
+      margin-top: 14px;
+      background: rgba(59,130,246,0.07);
+      border: 1px solid rgba(59,130,246,0.18);
+      border-radius: 12px;
+      padding: 12px 16px;
+    }
+    .timer-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .timer-label { font-size: 11px; color: var(--muted); font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; }
+    .timer-digits {
+      font-size: 22px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.02em;
+      color: #93c5fd;
+    }
+    .timer-eta { font-size: 11px; color: var(--muted); }
+    .progress-track {
+      height: 4px;
+      background: rgba(255,255,255,0.07);
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      border-radius: 99px;
+      transition: width 1s linear;
+      width: 0%;
+    }
+
   </style>
 </head>
 <body>
 
 <div class="card">
   <div class="header">
-    <div class="badge"><span class="dot"></span> v2.3 Pure AccuWeather &amp; Windy</div>
+    <div class="badge"><span class="dot"></span> Weather Forecast Automation &middot; AI</div>
     <h1>Weather Intelligence<br>Automation</h1>
-    <p class="subtitle">Live browser scraping · AccuWeather · Windy · IMD GIS Maps</p>
+    <p class="subtitle">Live browser scraping · AccuWeather · Windy (ECMWF) · IMD GIS Maps</p>
   </div>
 
   <!-- City Search & Chip List -->
@@ -412,6 +451,18 @@
     <span id="btn-label">GET DATA</span>
   </button>
 
+  <!-- Countdown Timer -->
+  <div id="timer-bar">
+    <div class="timer-row">
+      <span class="timer-label">Estimated time remaining</span>
+      <span class="timer-digits" id="timer-digits">--:--</span>
+    </div>
+    <div class="progress-track">
+      <div class="progress-fill" id="progress-fill"></div>
+    </div>
+    <div class="timer-eta" id="timer-eta" style="margin-top:6px;"></div>
+  </div>
+
   <!-- Progress Logs -->
   <div id="progress-panel">
     <div class="panel-header">
@@ -450,6 +501,12 @@
   let currentFilename = null;
   let searchDebounceTimer = null;
 
+  // ── Timer state ─────────────────────────────────────────────────────────────
+  let _timerInterval = null;   // setInterval handle for the countdown tick
+  let _pollInterval  = null;   // setInterval handle for mobile fallback polling
+  let _jobStartTime  = null;   // Date.now() when job started
+  let _etaSeconds    = 120;    // estimated total duration in seconds
+
   const searchInput    = document.getElementById('city-search');
   const autoList       = document.getElementById('autocomplete-list');
   const chipsContainer = document.getElementById('chips-container');
@@ -467,10 +524,82 @@
   const stepCounter    = document.getElementById('step-counter');
   const fnLabel        = document.getElementById('filename-label');
   const errMsg         = document.getElementById('error-msg');
+  const timerBar       = document.getElementById('timer-bar');
+  const timerDigits    = document.getElementById('timer-digits');
+  const progressFill   = document.getElementById('progress-fill');
+  const timerEta       = document.getElementById('timer-eta');
 
   const API_BASE = window.location.protocol.startsWith('http') ? '' : 'http://127.0.0.1:5000';
 
-  // Initialize dates
+  // ── ETA calculation ─────────────────────────────────────────────────────────
+  // ~35s AccuWeather overhead + 30s per location for Windy (ECMWF loads slower) + 40s IMD
+  function calcEta() {
+    const numCities = selectedCities.length || 5;
+    const numDays   = Math.max(parseInt(rangeLabel.textContent) || 1, 1);
+    return 35 + (numCities * 30) + (numDays * 15) + 40;
+  }
+
+  function startTimer(totalSec) {
+    _etaSeconds   = totalSec;
+    _jobStartTime = Date.now();
+    timerBar.style.display = 'block';
+    progressFill.style.width = '0%';
+    _clearTimer();
+
+    _timerInterval = setInterval(() => {
+      const elapsed  = (Date.now() - _jobStartTime) / 1000;
+      const remaining = Math.max(0, _etaSeconds - elapsed);
+      const pct = Math.min(100, (elapsed / _etaSeconds) * 100);
+
+      const m = String(Math.floor(remaining / 60)).padStart(2, '0');
+      const s = String(Math.floor(remaining % 60)).padStart(2, '0');
+      timerDigits.textContent = `${m}:${s}`;
+      progressFill.style.width = `${pct}%`;
+
+      if (remaining <= 0) {
+        timerDigits.textContent = '00:00';
+        timerEta.textContent = 'Almost there — finalising…';
+      } else {
+        timerEta.textContent = `Started ${Math.floor(elapsed)}s ago · ~${Math.ceil(remaining)}s left`;
+      }
+    }, 1000);
+  }
+
+  function _clearTimer() {
+    if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+    if (_pollInterval)  { clearInterval(_pollInterval);  _pollInterval  = null; }
+  }
+
+  function stopTimer() {
+    _clearTimer();
+    timerDigits.textContent = '✓ Done';
+    progressFill.style.width = '100%';
+    progressFill.style.transition = 'width 0.4s ease';
+    timerEta.textContent = '';
+    setTimeout(() => { timerBar.style.display = 'none'; }, 2500);
+  }
+
+  // ── Mobile fallback polling ─────────────────────────────────────────────────
+  // On phones the browser can kill the SSE connection. Poll /status every 8s as safety net.
+  function startPolling() {
+    _pollInterval = setInterval(() => {
+      fetch(`${API_BASE}/status`)
+        .then(r => r.json())
+        .then(s => {
+          if (!s.running) {
+            if (s.ppt_path && !currentFilename) {
+              const fname = s.ppt_path.split(/[\\\/]/).pop();
+              jobDone(fname);
+            } else if (s.error && !currentFilename) {
+              showError(s.error);
+            }
+          }
+        })
+        .catch(() => {});
+    }, 8000);
+  }
+
+  // ── Date helpers ────────────────────────────────────────────────────────────
   function initDates() {
     const today = new Date();
     const yyyy = today.getFullYear();
@@ -497,8 +626,7 @@
     const s = new Date(startDateInput.value);
     const e = new Date(endDateInput.value);
     if (!isNaN(s) && !isNaN(e)) {
-      const diffTime = e - s;
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+      const diffDays = Math.ceil((e - s) / (1000 * 60 * 60 * 24)) + 1;
       rangeLabel.textContent = diffDays > 0 ? `${diffDays} Day${diffDays > 1 ? 's' : ''}` : 'Invalid range';
     }
   }
@@ -511,7 +639,7 @@
   });
   endDateInput.addEventListener('change', updateRangeLabel);
 
-  // Render City Chips
+  // ── City chips ──────────────────────────────────────────────────────────────
   function renderChips() {
     chipsContainer.innerHTML = '';
     selectedCities.forEach((city, idx) => {
@@ -526,53 +654,29 @@
     cityCountEl.textContent = selectedCities.length;
   }
 
-  function removeCity(index) {
-    selectedCities.splice(index, 1);
-    renderChips();
-  }
+  function removeCity(index) { selectedCities.splice(index, 1); renderChips(); }
+  function clearCities() { selectedCities = []; renderChips(); }
 
-  function clearCities() {
-    selectedCities = [];
-    renderChips();
-  }
-
-  // City Search Autocomplete via Open-Meteo Geocoding
+  // ── City autocomplete ────────────────────────────────────────────────────────
   searchInput.addEventListener('input', (e) => {
     const q = e.target.value.trim();
     clearTimeout(searchDebounceTimer);
-    if (q.length < 2) {
-      autoList.style.display = 'none';
-      return;
-    }
+    if (q.length < 2) { autoList.style.display = 'none'; return; }
     searchDebounceTimer = setTimeout(() => {
       fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=8&language=en&format=json`)
         .then(r => r.json())
         .then(data => {
           autoList.innerHTML = '';
           const results = data.results || [];
-          if (results.length === 0) {
-            autoList.style.display = 'none';
-            return;
-          }
-          // Prioritize India
+          if (!results.length) { autoList.style.display = 'none'; return; }
           results.sort((a, b) => (b.country_code === 'IN') - (a.country_code === 'IN'));
-
           results.forEach(item => {
             const row = document.createElement('div');
             row.className = 'autocomplete-item';
             const state = item.admin1 || item.country || '';
-            row.innerHTML = `
-              <span><strong>${escHtml(item.name)}</strong>, ${escHtml(state)}</span>
-              <span class="state-tag">${item.country_code || ''}</span>
-            `;
+            row.innerHTML = `<span><strong>${escHtml(item.name)}</strong>, ${escHtml(state)}</span><span class="state-tag">${item.country_code || ''}</span>`;
             row.onclick = () => {
-              addCity({
-                name: item.name,
-                state: item.admin1 || 'India',
-                lat: item.latitude,
-                lon: item.longitude,
-                accu_query: `${item.name} ${item.admin1 || ''} India`.trim()
-              });
+              addCity({ name: item.name, state: item.admin1 || 'India', lat: item.latitude, lon: item.longitude, accu_query: `${item.name} ${item.admin1 || ''} India`.trim() });
               searchInput.value = '';
               autoList.style.display = 'none';
             };
@@ -580,16 +684,12 @@
           });
           autoList.style.display = 'block';
         })
-        .catch(() => {
-          autoList.style.display = 'none';
-        });
+        .catch(() => { autoList.style.display = 'none'; });
     }, 280);
   });
 
   document.addEventListener('click', (e) => {
-    if (!autoList.contains(e.target) && e.target !== searchInput) {
-      autoList.style.display = 'none';
-    }
+    if (!autoList.contains(e.target) && e.target !== searchInput) autoList.style.display = 'none';
   });
 
   function addCity(city) {
@@ -599,7 +699,7 @@
     }
   }
 
-  // Job Runner
+  // ── Logging ─────────────────────────────────────────────────────────────────
   function addLog(text, cls = '') {
     stepCount++;
     stepCounter.textContent = `Step ${stepCount}`;
@@ -607,10 +707,7 @@
     const icon  = icons[cls] || '·';
     const line  = document.createElement('div');
     line.className = `log-line ${cls}`;
-    line.innerHTML = `
-      <span class="log-icon">${icon}</span>
-      <span class="log-msg">${escHtml(text)}</span>
-    `;
+    line.innerHTML = `<span class="log-icon">${icon}</span><span class="log-msg">${escHtml(text)}</span>`;
     log.appendChild(line);
     log.scrollTop = log.scrollHeight;
   }
@@ -621,20 +718,15 @@
   }
 
   function classifyMsg(msg) {
-    if (msg.startsWith('ERROR') || msg.toLowerCase().includes('error') || msg.toLowerCase().includes('failed'))
-      return 'err';
-    if (msg.startsWith('DONE') || msg.includes('✓') || msg.toLowerCase().includes('complete'))
-      return 'ok';
-    if (msg.toLowerCase().includes('opening') || msg.toLowerCase().includes('launching') || msg.toLowerCase().includes('starting') || msg.toLowerCase().includes('generating'))
-      return 'info';
+    if (msg.startsWith('ERROR') || msg.toLowerCase().includes('error') || msg.toLowerCase().includes('failed')) return 'err';
+    if (msg.startsWith('DONE') || msg.includes('✓') || msg.toLowerCase().includes('complete')) return 'ok';
+    if (msg.toLowerCase().includes('opening') || msg.toLowerCase().includes('launching') || msg.toLowerCase().includes('starting') || msg.toLowerCase().includes('generating')) return 'info';
     return '';
   }
 
+  // ── Job runner ───────────────────────────────────────────────────────────────
   function startJob() {
-    if (selectedCities.length === 0) {
-      alert("Please add at least one city.");
-      return;
-    }
+    if (selectedCities.length === 0) { alert("Please add at least one city."); return; }
 
     log.innerHTML = '';
     stepCount = 0;
@@ -646,14 +738,16 @@
     spinner.style.display    = 'block';
     btnLabel.textContent     = 'Automating…';
     currentFilename          = null;
+    _clearTimer();
+
+    // Start countdown with estimated duration
+    const eta = calcEta();
+    startTimer(eta);
+    startPolling();  // mobile safety net
 
     if (evtSource) { evtSource.close(); evtSource = null; }
 
-    const payload = {
-      locations: selectedCities,
-      startDate: startDateInput.value,
-      endDate: endDateInput.value
-    };
+    const payload = { locations: selectedCities, startDate: startDateInput.value, endDate: endDateInput.value };
 
     fetch(`${API_BASE}/get-data`, {
       method: 'POST',
@@ -663,48 +757,59 @@
       .then(r => r.json())
       .then(data => {
         if (data.error) { showError(data.error); return; }
-        addLog('Automation engine initialized…', 'info');
-        evtSource = new EventSource(`${API_BASE}/progress`);
-        evtSource.onmessage = e => {
-          const d = JSON.parse(e.data);
-          if (d.msg) {
-            const cls = classifyMsg(d.msg);
-            let display = d.msg.replace(/^DONE:.*/, 'PowerPoint presentation saved ✓');
-            addLog(display, cls);
-          }
-          if (d.done) {
-            currentFilename = d.filename;
-            evtSource.close();
-            jobDone(d.filename);
-          }
-          if (d.error) {
-            evtSource.close();
-            showError(d.error);
-          }
-        };
-        evtSource.onerror = () => {
-          evtSource.close();
-          fetch(`${API_BASE}/status`).then(r => r.json()).then(s => {
-            if (s.ppt_path) jobDone(s.ppt_path.split(/[\\\/]/).pop());
-            else if (s.error) showError(s.error);
-            else if (!s.running) showError('Session closed unexpectedly.');
-          });
-        };
+        addLog('Automation engine initialised…', 'info');
+        connectSSE();
       })
       .catch(err => showError(String(err)));
   }
 
+  function connectSSE() {
+    if (evtSource) { evtSource.close(); evtSource = null; }
+    evtSource = new EventSource(`${API_BASE}/progress`);
+    evtSource.onmessage = e => {
+      const d = JSON.parse(e.data);
+      if (d.msg) {
+        const cls = classifyMsg(d.msg);
+        let display = d.msg.replace(/^DONE:.*/, 'PowerPoint presentation saved ✓');
+        addLog(display, cls);
+      }
+      if (d.done) {
+        currentFilename = d.filename;
+        evtSource.close();
+        jobDone(d.filename);
+      }
+      if (d.error) { evtSource.close(); showError(d.error); }
+    };
+    evtSource.onerror = () => {
+      // SSE dropped (common on mobile) — the poll interval will catch completion
+      evtSource.close();
+      evtSource = null;
+    };
+  }
+
   function jobDone(filename) {
     currentFilename = filename;
+    _clearTimer();
+    stopTimer();
     btnGet.disabled         = false;
     spinner.style.display   = 'none';
     btnLabel.textContent    = 'GET DATA';
     dlSection.style.display = 'block';
     fnLabel.textContent     = filename;
     addLog('All forecasts & IMD maps compiled successfully ✓', 'ok');
+
+    // Auto-refresh page after 3 seconds so mobile users see the download button
+    // (handles the case where they opened the page fresh and it was already done)
+    setTimeout(() => {
+      // Only auto-scroll to download on mobile
+      const dlBtn = document.getElementById('btn-download');
+      if (dlBtn) dlBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 800);
   }
 
   function showError(msg) {
+    _clearTimer();
+    timerBar.style.display   = 'none';
     btnGet.disabled          = false;
     spinner.style.display    = 'none';
     btnLabel.textContent     = 'GET DATA';
@@ -713,10 +818,10 @@
     addLog(`ERROR: ${msg}`, 'err');
   }
 
-  function downloadFile() {
-    window.location.href = `${API_BASE}/download`;
-  }
+  function downloadFile() { window.location.href = `${API_BASE}/download`; }
 
+  // ── On page load ─────────────────────────────────────────────────────────────
+  // If a job is already running (user refreshed mid-job), reconnect SSE + restart timer
   window.addEventListener('DOMContentLoaded', () => {
     initDates();
     renderChips();
@@ -724,13 +829,27 @@
       .then(r => r.json())
       .then(s => {
         if (s.ppt_path && !s.running) {
+          // Previous job finished — show download
           const fname = s.ppt_path.split(/[\\\/]/).pop();
           jobDone(fname);
+        } else if (s.running) {
+          // Job in progress (user refreshed) — reconnect SSE and show timer
+          btnGet.disabled       = true;
+          spinner.style.display = 'block';
+          btnLabel.textContent  = 'Automating…';
+          panel.style.display   = 'block';
+          addLog('Reconnected to running job…', 'info');
+          const eta = calcEta();
+          startTimer(eta);
+          startPolling();
+          connectSSE();
         }
       })
       .catch(() => {});
   });
 </script>
+
+
 
 </body>
 </html>
