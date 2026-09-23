@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import queue
+import subprocess
 import threading
 import time
 from datetime import datetime
@@ -18,6 +19,21 @@ from weather_automation import run_automation
 from ppt_generator import generate_ppt
 
 app = Flask(__name__, static_folder=".", static_url_path="")
+
+# ── Build identity ────────────────────────────────────────────────────────────
+def _get_build_info():
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=os.path.dirname(__file__),
+            stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except Exception:
+        commit = "unknown"
+    ts = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
+    return f"{commit} · {ts}"
+
+BUILD_INFO = _get_build_info()
 
 @app.after_request
 def add_cors_headers(response):
@@ -159,8 +175,10 @@ def status():
         return jsonify({
             "running": _job_state["running"],
             "ppt_path": _job_state["ppt_path"],
-            "error": _job_state["error"]
+            "error": _job_state["error"],
+            "build": BUILD_INFO
         })
+
 
 @app.route("/version")
 def version():

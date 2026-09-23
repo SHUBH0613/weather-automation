@@ -352,6 +352,39 @@
     #log::-webkit-scrollbar, .chips-container::-webkit-scrollbar { width: 4px; }
     #log::-webkit-scrollbar-thumb, .chips-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
+    /* ── Dev credit (top-right) ── */
+    .dev-credit {
+      position: absolute;
+      top: 14px;
+      right: 18px;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--muted);
+      letter-spacing: 0.02em;
+      opacity: 0.75;
+    }
+
+    /* ── Build footer ── */
+    .build-footer {
+      margin-top: 20px;
+      padding-top: 12px;
+      border-top: 1px solid rgba(255,255,255,0.05);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-size: 10.5px;
+      color: #334155;
+      letter-spacing: 0.04em;
+    }
+    .build-footer .build-dot {
+      width: 5px; height: 5px;
+      background: #1e40af;
+      border-radius: 50%;
+    }
+    #build-label { font-variant-numeric: tabular-nums; }
+
+
     /* ── Countdown Timer ── */
     #timer-bar {
       display: none;
@@ -395,6 +428,7 @@
 <body>
 
 <div class="card">
+  <span class="dev-credit">Developed by शुभ</span>
   <div class="header">
     <div class="badge"><span class="dot"></span> Weather Forecast Automation &middot; AI</div>
     <h1>Weather Intelligence<br>Automation</h1>
@@ -484,6 +518,12 @@
   <!-- Error Section -->
   <div id="error-section">
     ⚠ <span id="error-msg"></span>
+  </div>
+
+  <!-- Build Footer -->
+  <div class="build-footer">
+    <span class="build-dot"></span>
+    <span id="build-label">Loading build info…</span>
   </div>
 </div>
 
@@ -828,6 +868,10 @@
     fetch(`${API_BASE}/status`)
       .then(r => r.json())
       .then(s => {
+        // Show build info
+        const buildEl = document.getElementById('build-label');
+        if (buildEl && s.build) buildEl.textContent = `Build ${s.build}`;
+
         if (s.ppt_path && !s.running) {
           // Previous job finished — show download
           const fname = s.ppt_path.split(/[\\\/]/).pop();
@@ -845,8 +889,12 @@
           connectSSE();
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        const buildEl = document.getElementById('build-label');
+        if (buildEl) buildEl.textContent = 'Build info unavailable';
+      });
   });
+
 </script>
 
 
