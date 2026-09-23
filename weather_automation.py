@@ -330,8 +330,8 @@ async def fetch_windy_for_location(
             "remark": "GO"
         }
 
-    await emit(f"Windy — Fetching {name} ({lat:.3f}, {lon:.3f}) directly from windy.com...")
-    url = f"https://www.windy.com/{lat}/{lon}?clouds,{lat},{lon},11"
+    await emit(f"Windy — Fetching {name} ({lat:.3f}, {lon:.3f}) [ECMWF model] directly from windy.com...")
+    url = f"https://www.windy.com/{lat}/{lon}?ecmwf,{lat},{lon},11"
 
     table_data = None
     for attempt in range(1, 3):
@@ -460,21 +460,13 @@ async def fetch_windy_for_location(
                     ic = d_icons[h_idx] if h_idx < len(d_icons) else ""
                     day_clouds.append(_parse_cloud_val(ic))
 
-            # Fallback if no specific daytime slots were matched
-            if not day_clouds and d_hours:
-                for h_idx, hr in enumerate(d_hours):
-                    r_text = d_rains[h_idx] if h_idx < len(d_rains) else ""
-                    day_rain_sum += _parse_rain_val(r_text)
-
-                    ic = d_icons[h_idx] if h_idx < len(d_icons) else ""
-                    day_clouds.append(_parse_cloud_val(ic))
-
-            avg_cloud = round(sum(day_clouds) / len(day_clouds)) if day_clouds else 20.0
+            # Use MAX cloud cover — peak cloudiness is what matters, not average
+            max_cloud = max(day_clouds) if day_clouds else 20.0
             day_rain_sum = round(day_rain_sum, 1)
 
             parsed_days.append({
                 "rain": day_rain_sum,
-                "cloud": avg_cloud
+                "cloud": max_cloud
             })
             cursor += colspan
 
@@ -718,6 +710,7 @@ async def run_automation(
                 window.localStorage.setItem('metric_rain', '"mm"');
                 window.localStorage.setItem('metric_temp', '"°C"');
                 window.localStorage.setItem('metric_wind', '"kt"');
+                window.localStorage.setItem('product', '"ecmwf"');
             } catch(e) {}
         ''')
         page = await context.new_page()
