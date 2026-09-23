@@ -725,25 +725,8 @@ async def run_automation(
                 viewport={"width": 1366, "height": 768},
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
             )
-            await context.add_init_script(r'''
-                try {
-                    window.localStorage.setItem('settings_consent', JSON.stringify({
-                        version: "2023/11",
-                        timestamp: Date.now(),
-                        analytics: true,
-                        explicit: true
-                    }));
-                    window.localStorage.setItem('settings_consent_ts', Date.now().toString());
-                    window.localStorage.setItem('settings_analyticsConsentRequired', 'false');
-                    window.localStorage.setItem('settings_defaultUnits', '"metric"');
-                    window.localStorage.setItem('settings_country', '"in"');
-                    window.localStorage.setItem('metric_rain', '"mm"');
-                    window.localStorage.setItem('metric_temp', '"°C"');
-                    window.localStorage.setItem('metric_wind', '"kt"');
-                    window.localStorage.setItem('product', '"ecmwf"');
-                } catch(e) {}
-            ''')
             page = await context.new_page()
+
             for loc in locations:
                 res_by_date = await fetch_windy_for_location(page, loc, target_dates, today, emit)
                 windy_all[loc["name"]] = res_by_date
