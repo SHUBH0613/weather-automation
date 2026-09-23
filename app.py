@@ -22,14 +22,19 @@ app = Flask(__name__, static_folder=".", static_url_path="")
 
 # ── Build identity ────────────────────────────────────────────────────────────
 def _get_build_info():
-    try:
-        commit = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=os.path.dirname(__file__),
-            stderr=subprocess.DEVNULL
-        ).decode().strip()
-    except Exception:
-        commit = "unknown"
+    # Render strips .git from deployed containers but injects RENDER_GIT_COMMIT
+    commit = os.environ.get("RENDER_GIT_COMMIT", "")
+    if commit:
+        commit = commit[:7]   # short hash (first 7 chars)
+    else:
+        try:
+            commit = subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=os.path.dirname(__file__),
+                stderr=subprocess.DEVNULL
+            ).decode().strip()
+        except Exception:
+            commit = "dev-local"
     ts = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
     return f"{commit} · {ts}"
 
