@@ -735,14 +735,21 @@ async def run_automation(
         await emit("Windy extraction complete [OK]")
         return windy_all
 
-    # Run AccuWeather, Windy, and IMD concurrently
-    await emit("Launching AccuWeather · Windy · IMD in parallel...")
-    accu_results_all, windy_results_all, imd_results_all = await asyncio.gather(
+    # ── Two-phase parallel execution to avoid dual-browser OOM ─────────────────
+    # Phase 1: AccuWeather (pure HTTP — no browser) + IMD (1 browser) run together.
+    # Phase 2: Windy (1 browser) runs after IMD browser is fully closed.
+    # → Never two Chromium instances simultaneously → stays within Render's 512MB RAM.
+
+    await emit("Phase 1 — AccuWeather + IMD maps (parallel)...")
+    accu_results_all, imd_results_all = await asyncio.gather(
         _run_accu(),
-        _run_windy(),
         fetch_imd_maps_for_dates_and_states(target_dates, distinct_states, today, emit)
     )
     await emit("IMD Warning maps complete [OK]")
+
+    await emit("Phase 2 — Windy ECMWF browser scrape...")
+    windy_results_all = await _run_windy()
+
 
 
     # Assemble structured output grouped by date
