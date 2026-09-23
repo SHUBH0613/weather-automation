@@ -364,6 +364,23 @@ async def fetch_windy_for_location(
             except Exception:
                 pass
 
+            # Explicitly select ECMWF model in the bottom forecast bar
+            try:
+                switched = await page.evaluate(r'''() => {
+                    const items = Array.from(document.querySelectorAll('.switch__item, a, button'));
+                    const ecmwf = items.find(el => el.innerText && el.innerText.trim().startsWith('ECMWF'));
+                    if (ecmwf && !ecmwf.classList.contains('selected')) {
+                        ecmwf.click();
+                        return true;
+                    }
+                    return false;
+                }''')
+                if switched:
+                    await page.wait_for_timeout(1200)
+            except Exception:
+                pass
+
+
             table_data = await page.evaluate(r'''() => {
                 const table = document.querySelector('.forecast-table__table') || document.querySelector('.forecast-table');
                 if (!table) return null;
