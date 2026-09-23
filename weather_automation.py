@@ -102,7 +102,7 @@ def load_default_config():
             return json.load(f)
     return {
         "locations": [
-            {"name": "Nashik", "state": "Maharashtra", "lat": 19.9975, "lon": 73.7898},
+            {"name": "Nashik", "state": "Maharashtra", "lat": 20.0110, "lon": 73.7900},
             {"name": "Mumbai", "state": "Maharashtra", "lat": 19.0760, "lon": 72.8777},
             {"name": "Pune", "state": "Maharashtra", "lat": 18.5204, "lon": 73.8567},
             {"name": "Ahmednagar", "state": "Maharashtra", "lat": 19.0948, "lon": 74.7479},
