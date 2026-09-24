@@ -17,6 +17,7 @@ from flask import Flask, Response, request, send_file, jsonify
 
 from weather_automation import run_automation
 from ppt_generator import generate_ppt
+from whatsapp_notifier import send_whatsapp_message, format_whatsapp_summary
 
 app = Flask(__name__, static_folder=".", static_url_path="")
 
@@ -83,7 +84,7 @@ def _finish(ppt_path: str = None, error: str = None):
         _job_state["error"] = error
 
 # ── Background worker ─────────────────────────────────────────────────────────
-def _run_in_thread(locations=None, start_date=None, end_date=None):
+def _run_in_thread(locations=None, start_date=None, end_date=None, whatsapp_target=None):
     async def _async_job():
         async def emit(msg: str):
             print(f"[Worker] {msg}", flush=True)
@@ -100,6 +101,23 @@ def _run_in_thread(locations=None, start_date=None, end_date=None):
             ppt_path = generate_ppt(result)
             _push(f"DONE:{ppt_path}")
             _finish(ppt_path=ppt_path)
+
+            # If WhatsApp target specified, send notification + PPT attachment
+            if whatsapp_target:
+                try:
+                    _push(f"Sending presentation to WhatsApp: {whatsapp_target}...")
+                    public_base = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+                    filename = os.path.basename(ppt_path)
+                    media_url = f"{public_base}/download/{filename}" if public_base else None
+                    summary_text = format_whatsapp_summary(result)
+                    if media_url:
+                        summary_text += f"\n\n🔗 *Direct Download Link*:\n{media_url}"
+                    send_res = send_whatsapp_message(whatsapp_target, summary_text, media_url=media_url)
+                    _push(f"WhatsApp message dispatched: {send_res.get('status', 'sent')}")
+                except Exception as e_wa:
+                    print(f"[WhatsApp] Delivery failed: {e_wa}")
+                    _push(f"WhatsApp delivery warning: {e_wa}")
+
         except Exception as e:
             _push(f"ERROR:{e}")
             _finish(error=str(e))
@@ -124,15 +142,18 @@ def get_data():
     locations = data.get("locations")
     start_date = data.get("startDate")
     end_date = data.get("endDate")
+    whatsapp_target = None
+    if data.get("sendWhatsApp"):
+        whatsapp_target = data.get("phone") or os.environ.get("TARGET_PHONE_NUMBER", "+917761866811")
 
     _reset_job()
     t = threading.Thread(
         target=_run_in_thread,
-        args=(locations, start_date, end_date),
+        args=(locations, start_date, end_date, whatsapp_target),
         daemon=True
     )
     t.start()
-    return jsonify({"status": "started"})
+    return jsonify({"status": "started", "whatsapp_target": whatsapp_target})
 
 @app.route("/progress")
 def progress():
@@ -178,6 +199,86 @@ def download():
         as_attachment=True,
         download_name=os.path.basename(ppt_path)
     )
+
+@app.route("/download/<path:filename>")
+def download_specific_file(filename):
+    """Serve specific PPT presentation file publicly so Twilio WhatsApp can fetch it."""
+    safe_name = os.path.basename(filename)
+    file_path = os.path.join(os.path.dirname(__file__), safe_name)
+    if os.path.exists(file_path):
+        return send_file(
+            file_path,
+            as_attachment=True,
+            download_name=safe_name,
+            mimetype="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        )
+    return jsonify({"error": "File not found"}), 404
+
+@app.route("/api/whatsapp-webhook", methods=["POST"])
+def whatsapp_webhook():
+    """
+    Twilio WhatsApp Sandbox Webhook:
+    When you text 'send now' or 'weather' to the Twilio sandbox number (+1 415 523 8886)
+    from your WhatsApp (+91 7761866811), this endpoint triggers automation and responds.
+    """
+    from_number = request.form.get("From", "").strip()
+    body = request.form.get("Body", "").strip().lower()
+    print(f"[WhatsApp Webhook] Incoming message from {from_number}: '{body}'")
+
+    triggers = ["send now", "send", "weather", "ppt", "wx", "now", "report", "update"]
+    matched = any(t in body for t in triggers)
+
+    if not matched:
+        reply = (
+            "👋 *Weather Automation Bot*\n\n"
+            "To generate and receive today's Weather Presentation directly here, reply:\n"
+            "👉 *'send now'*"
+        )
+        twiml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{reply}</Message></Response>'
+        return Response(twiml, mimetype="application/xml")
+
+    with _job_lock:
+        if _job_state["running"]:
+            reply = (
+                "⏳ *Report already generating!*\n\n"
+                "The automation is actively gathering weather data right now. "
+                "Your PPT will be sent as soon as it completes in ~1-2 minutes."
+            )
+            twiml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{reply}</Message></Response>'
+            return Response(twiml, mimetype="application/xml")
+
+    target_phone = from_number or os.environ.get("TARGET_PHONE_NUMBER", "+917761866811")
+    _reset_job()
+    t = threading.Thread(
+        target=_run_in_thread,
+        args=(None, None, None, target_phone),
+        daemon=True
+    )
+    t.start()
+
+    reply = (
+        "🌤️ *Weather Automation Initiated!*\n\n"
+        "Collecting live data for Nashik, Mumbai, Pune, Ahmednagar & Aurangabad (AccuWeather, Windy & IMD)...\n\n"
+        "Your PowerPoint briefing will be delivered here in ~2 minutes."
+    )
+    twiml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{reply}</Message></Response>'
+    return Response(twiml, mimetype="application/xml")
+
+@app.route("/api/trigger-daily", methods=["GET", "POST"])
+def trigger_daily():
+    """Endpoint for cron services (GitHub Actions / cron-job.org) to trigger daily 06:30 AM IST report."""
+    target_phone = request.args.get("phone") or os.environ.get("TARGET_PHONE_NUMBER", "+917761866811")
+    with _job_lock:
+        if _job_state["running"]:
+            return jsonify({"status": "already_running"}), 429
+    _reset_job()
+    t = threading.Thread(
+        target=_run_in_thread,
+        args=(None, None, None, target_phone),
+        daemon=True
+    )
+    t.start()
+    return jsonify({"status": "started", "target": target_phone})
 
 @app.route("/status")
 def status():
