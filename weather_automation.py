@@ -208,9 +208,19 @@ async def fetch_accuweather_for_location(
     daily_url = re.sub(r'/(weather-today|weather-tomorrow|weather-forecast)/', '/daily-weather-forecast/', base_url).split("?")[0]
 
     try:
-        r = cffi_requests.get(daily_url, impersonate="chrome124", timeout=15)
-        if r.status_code != 200:
-            await emit(f"  AccuWeather - {name}: HTTP {r.status_code}")
+        r = None
+        for attempt in range(1, 3):
+            try:
+                r = cffi_requests.get(daily_url, impersonate="chrome124", timeout=15)
+                if r.status_code == 200:
+                    break
+            except Exception as e_cffi:
+                if attempt == 2:
+                    raise e_cffi
+                await asyncio.sleep(1)
+
+        if not r or r.status_code != 200:
+            await emit(f"  AccuWeather - {name}: HTTP {r.status_code if r else 'Timeout'}")
             return results
 
         soup = BeautifulSoup(r.text, "html.parser")
@@ -368,19 +378,25 @@ async def fetch_windy_for_location(
             except Exception:
                 pass
 
-            # Explicitly select ECMWF model in the bottom forecast bar (unconditional click to force detail table to ECMWF)
+            # Explicitly select ECMWF 9km in the forecast table source dropdown
             try:
-                switched = await page.evaluate(r'''() => {
-                    const items = Array.from(document.querySelectorAll('.switch__item, a, button'));
-                    const ecmwf = items.find(el => el.innerText && el.innerText.trim().startsWith('ECMWF'));
-                    if (ecmwf) {
-                        ecmwf.click();
-                        return true;
-                    }
-                    return false;
+                cur_src = await page.evaluate(r'''() => {
+                    const dd = document.querySelector('.ddmenu, [class*="drop-down-menu"]');
+                    return dd ? dd.innerText.trim() : '';
                 }''')
-                if switched:
-                    await page.wait_for_timeout(1500)
+                if "ECMWF" not in cur_src:
+                    await page.evaluate(r'''() => {
+                        const dd = document.querySelector('.ddmenu, [class*="drop-down-menu"]');
+                        if (dd) dd.click();
+                    }''')
+                    await page.wait_for_timeout(1000)
+
+                    await page.evaluate(r'''() => {
+                        const all = Array.from(document.querySelectorAll('.switch__item.svelte-ttmnt8, .drop-down-menu *'));
+                        const target = all.find(el => el.innerText && el.innerText.trim().startsWith('ECMWF'));
+                        if (target) target.click();
+                    }''')
+                    await page.wait_for_timeout(2000)
             except Exception:
                 pass
 
