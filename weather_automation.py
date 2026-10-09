@@ -141,6 +141,10 @@ KNOWN_ACCU_LOCATIONS = {
     "bangalore": "https://www.accuweather.com/en/in/bengaluru/204108/daily-weather-forecast/204108",
     "hyderabad": "https://www.accuweather.com/en/in/hyderabad/202190/daily-weather-forecast/202190",
     "chennai": "https://www.accuweather.com/en/in/chennai/206671/daily-weather-forecast/206671",
+    "bidar": "https://www.accuweather.com/en/in/bidar/188753/daily-weather-forecast/188753",
+    "kadapa": "https://www.accuweather.com/en/in/kadapa/186821/daily-weather-forecast/186821",
+    "cuddapah": "https://www.accuweather.com/en/in/kadapa/186821/daily-weather-forecast/186821",
+    "tirupati": "https://www.accuweather.com/en/in/tirupati/2842614/daily-weather-forecast/2842614",
     "ahmedabad": "https://www.accuweather.com/en/in/ahmedabad/202438/daily-weather-forecast/202438",
     "jaipur": "https://www.accuweather.com/en/in/jaipur/205617/daily-weather-forecast/205617",
 }
@@ -377,6 +381,27 @@ async def fetch_windy_for_location(
                 }''')
                 if switched:
                     await page.wait_for_timeout(1500)
+            except Exception:
+                pass
+
+            # If table has 15 days forecast button, click it to expand table horizon
+            try:
+                expanded = await page.evaluate(r'''() => {
+                    const btn = document.querySelector('.extended, [data-ref="nextDays"]');
+                    if (btn) {
+                        btn.click();
+                        return true;
+                    }
+                    const all = Array.from(document.querySelectorAll('div, a, button'));
+                    const f = all.find(e => e.innerText && e.innerText.trim().startsWith('15 days'));
+                    if (f) {
+                        f.click();
+                        return true;
+                    }
+                    return false;
+                }''')
+                if expanded:
+                    await page.wait_for_timeout(2000)
             except Exception:
                 pass
 

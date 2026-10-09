@@ -4,38 +4,43 @@
   "locations": [
     {
       "name": "Nashik",
+      "state": "Maharashtra",
       "lat": 20.0110,
       "lon": 73.7900,
       "accu_query": "Nashik Maharashtra India",
-      "accu_url": "https://www.accuweather.com/en/in/nashik/189304/weather-today/189304"
+      "accu_url": "https://www.accuweather.com/en/in/nashik/189304/daily-weather-forecast/189304"
     },
     {
-      "name": "Mumbai",
-      "lat": 19.0760,
-      "lon": 72.8777,
-      "accu_query": "Mumbai Maharashtra India",
-      "accu_url": "https://www.accuweather.com/en/in/mumbai/204842/weather-today/204842"
+      "name": "Bidar",
+      "state": "Karnataka",
+      "lat": 17.9104,
+      "lon": 77.5199,
+      "accu_query": "Bidar Karnataka India",
+      "accu_url": "https://www.accuweather.com/en/in/bidar/188753/daily-weather-forecast/188753"
     },
     {
-      "name": "Pune",
-      "lat": 18.5204,
-      "lon": 73.8567,
-      "accu_query": "Pune Maharashtra India",
-      "accu_url": "https://www.accuweather.com/en/in/pune/204848/weather-today/204848"
+      "name": "Kadapa",
+      "state": "Andhra Pradesh",
+      "lat": 14.4673,
+      "lon": 78.8242,
+      "accu_query": "Kadapa Andhra Pradesh India",
+      "accu_url": "https://www.accuweather.com/en/in/kadapa/186821/daily-weather-forecast/186821"
     },
     {
-      "name": "Ahmednagar",
-      "lat": 19.0952,
-      "lon": 74.7496,
-      "accu_query": "Ahmednagar Ahilyanagar Maharashtra India",
-      "accu_url": "https://www.accuweather.com/en/in/ahilyanagar/8-189314_1_al/weather-today/8-189314_1_al"
+      "name": "Tirupati",
+      "state": "Andhra Pradesh",
+      "lat": 13.6288,
+      "lon": 79.4192,
+      "accu_query": "Tirupati Andhra Pradesh India",
+      "accu_url": "https://www.accuweather.com/en/in/tirupati/2842614/daily-weather-forecast/2842614"
     },
     {
-      "name": "Aurangabad",
-      "lat": 19.8762,
-      "lon": 75.3433,
-      "accu_query": "Aurangabad Chhatrapati Sambhajinagar Maharashtra India",
-      "accu_url": "https://www.accuweather.com/en/in/chhatrapati-sambhajinagar/189320/weather-today/189320"
+      "name": "Chennai",
+      "state": "Tamil Nadu",
+      "lat": 13.0827,
+      "lon": 80.2707,
+      "accu_query": "Chennai Tamil Nadu India",
+      "accu_url": "https://www.accuweather.com/en/in/chennai/206671/daily-weather-forecast/206671"
     }
   ]
 }
