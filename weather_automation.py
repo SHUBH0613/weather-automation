@@ -9,9 +9,31 @@ import asyncio
 import json
 import os
 import re
+import sys
+import unicodedata
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, date
 from typing import List, Dict, Any, Callable, Optional
+
+# Guarantee UTF-8 console output on Windows (charmap codec workaround)
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+def clean_location_name(val: str) -> str:
+    """Normalize transliterated names with diacritics/macrons (e.g. Jhānsi -> Jhansi, Bhopāl -> Bhopal)."""
+    if not val:
+        return ""
+    nfkd = unicodedata.normalize('NFKD', str(val))
+    return "".join(c for c in nfkd if not unicodedata.combining(c)).strip()
 
 import pytz
 import requests
@@ -147,12 +169,19 @@ KNOWN_ACCU_LOCATIONS = {
     "tirupati": "https://www.accuweather.com/en/in/tirupati/2842614/daily-weather-forecast/2842614",
     "ahmedabad": "https://www.accuweather.com/en/in/ahmedabad/202438/daily-weather-forecast/202438",
     "jaipur": "https://www.accuweather.com/en/in/jaipur/205617/daily-weather-forecast/205617",
+    "jhansi": "https://www.accuweather.com/en/in/jhansi/1-191068_1_al/daily-weather-forecast/1-191068_1_al",
+    "bhopal": "https://www.accuweather.com/en/in/bhopal/1-204408_1_al/daily-weather-forecast/1-204408_1_al",
+    "indore": "https://www.accuweather.com/en/in/indore/204411/daily-weather-forecast/204411",
+    "gwalior": "https://www.accuweather.com/en/in/gwalior/204409/daily-weather-forecast/204409",
+    "jabalpur": "https://www.accuweather.com/en/in/jabalpur/204410/daily-weather-forecast/204410",
+    "kanpur": "https://www.accuweather.com/en/in/kanpur/206679/daily-weather-forecast/206679",
+    "lucknow": "https://www.accuweather.com/en/in/lucknow/206678/daily-weather-forecast/206678",
 }
 
 def get_accu_city_url(loc: Dict[str, Any]) -> str:
     if loc.get("accu_url"):
         return loc["accu_url"]
-    name = loc.get("name", "").strip()
+    name = clean_location_name(loc.get("name", ""))
     norm = re.sub(r'[^a-z0-9 ]', '', name.lower()).strip()
     if norm in KNOWN_ACCU_LOCATIONS:
         return KNOWN_ACCU_LOCATIONS[norm]
@@ -160,14 +189,14 @@ def get_accu_city_url(loc: Dict[str, Any]) -> str:
         if k in norm or norm in k:
             return v
 
-    state = loc.get("state", "India")
+    state = clean_location_name(loc.get("state", "India"))
     queries = [
         f"{name} {state} India",
         f"{name} India",
         f"{name}"
     ]
     for q in queries:
-        search_url = f"https://www.accuweather.com/en/search-locations?query={q}"
+        search_url = f"https://www.accuweather.com/en/search-locations?query={urllib.parse.quote(q)}"
         try:
             r = cffi_requests.get(search_url, impersonate="chrome124", timeout=12)
             if r.status_code == 200:
@@ -706,6 +735,15 @@ async def run_automation(
     # Parse locations
     if not locations or len(locations) == 0:
         locations = cfg["locations"]
+
+    # Sanitize locations: strip diacritics / transliterated macrons (e.g. Jhānsi -> Jhansi)
+    cleaned_locs = []
+    for loc in locations:
+        cloc = dict(loc)
+        cloc["name"] = clean_location_name(cloc.get("name", ""))
+        cloc["state"] = clean_location_name(cloc.get("state", ""))
+        cleaned_locs.append(cloc)
+    locations = cleaned_locs
 
     # Parse date range
     if start_date_str:

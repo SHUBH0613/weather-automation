@@ -9,9 +9,22 @@ import json
 import os
 import queue
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime
+
+# Guarantee UTF-8 console output on Windows (charmap codec workaround)
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 from flask import Flask, Response, request, send_file, jsonify
 
@@ -89,7 +102,14 @@ def _finish(ppt_path: str = None, error: str = None):
 def _run_in_thread(locations=None, start_date=None, end_date=None, whatsapp_target=None):
     async def _async_job():
         async def emit(msg: str):
-            print(f"[Worker] {msg}", flush=True)
+            try:
+                print(f"[Worker] {msg}", flush=True)
+            except Exception:
+                try:
+                    safe = str(msg).encode("ascii", "replace").decode("ascii")
+                    print(f"[Worker] {safe}", flush=True)
+                except Exception:
+                    pass
             _push(msg)
 
         try:

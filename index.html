@@ -745,7 +745,12 @@
   function removeCity(index) { selectedCities.splice(index, 1); renderChips(); }
   function clearCities() { selectedCities = []; renderChips(); }
 
-  // ── City autocomplete ────────────────────────────────────────────────────────
+  function stripDiacritics(str) {
+    if (!str) return '';
+    return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  }
+
+  // City autocomplete
   searchInput.addEventListener('input', (e) => {
     const q = e.target.value.trim();
     clearTimeout(searchDebounceTimer);
@@ -761,10 +766,17 @@
           results.forEach(item => {
             const row = document.createElement('div');
             row.className = 'autocomplete-item';
-            const state = item.admin1 || item.country || '';
-            row.innerHTML = `<span><strong>${escHtml(item.name)}</strong>, ${escHtml(state)}</span><span class="state-tag">${item.country_code || ''}</span>`;
+            const cleanName = stripDiacritics(item.name);
+            const cleanState = stripDiacritics(item.admin1 || item.country || '');
+            row.innerHTML = `<span><strong>${escHtml(cleanName)}</strong>, ${escHtml(cleanState)}</span><span class="state-tag">${item.country_code || ''}</span>`;
             row.onclick = () => {
-              addCity({ name: item.name, state: item.admin1 || 'India', lat: item.latitude, lon: item.longitude, accu_query: `${item.name} ${item.admin1 || ''} India`.trim() });
+              addCity({
+                name: cleanName,
+                state: cleanState || 'India',
+                lat: item.latitude,
+                lon: item.longitude,
+                accu_query: `${cleanName} ${cleanState || ''} India`.trim()
+              });
               searchInput.value = '';
               autoList.style.display = 'none';
             };
