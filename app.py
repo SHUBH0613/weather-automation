@@ -64,6 +64,7 @@ _job_state = {
     "messages": [],
     "ppt_path": None,
     "error": None,
+    "start_time": None,
 }
 
 def _reset_job():
@@ -72,6 +73,7 @@ def _reset_job():
         _job_state["messages"] = []
         _job_state["ppt_path"] = None
         _job_state["error"] = None
+        _job_state["start_time"] = time.time()
 
 def _push(msg: str):
     with _job_lock:
@@ -157,9 +159,10 @@ def get_data():
 
 @app.route("/progress")
 def progress():
-    """Server-Sent Events stream — client listens for real-time progress updates."""
+    """Server-Sent Events stream — client listens for real-time progress updates with heartbeats."""
     def event_stream():
         sent_count = 0
+        last_heartbeat = time.time()
         while True:
             with _job_lock:
                 msgs = _job_state["messages"]
@@ -179,6 +182,12 @@ def progress():
                 elif error:
                     yield f"data: {json.dumps({'error': error})}\n\n"
                 return
+
+            # Keep-alive heartbeat every 2.5s prevents Render / Cloudflare 504 gateway timeout
+            now = time.time()
+            if now - last_heartbeat >= 2.5:
+                yield ": keep-alive\n\n"
+                last_heartbeat = now
 
             time.sleep(0.3)
 
@@ -283,10 +292,14 @@ def trigger_daily():
 @app.route("/status")
 def status():
     with _job_lock:
+        start_t = _job_state.get("start_time")
+        elapsed = (time.time() - start_t) if (start_t and _job_state["running"]) else 0
         return jsonify({
             "running": _job_state["running"],
             "ppt_path": _job_state["ppt_path"],
             "error": _job_state["error"],
+            "elapsed": round(elapsed, 1),
+            "msg_count": len(_job_state["messages"]),
             "build": BUILD_INFO
         })
 

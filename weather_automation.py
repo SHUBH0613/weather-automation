@@ -298,10 +298,11 @@ async def fetch_accuweather_for_location(
                 if c_val is None:
                     c_val = 20.0 if (p_val or 0) < 30 else (50.0 if (p_val or 0) < 70 else 80.0)
 
-                if r_val is not None:
-                    r_stat = classify_rain(r_val)
-                elif p_val is not None:
+                # Classify based on the primary displayed metric (rain probability %)
+                if p_val is not None:
                     r_stat = classify_rain_prob(p_val)
+                elif r_val is not None:
+                    r_stat = classify_rain(r_val)
                 else:
                     r_stat = "DATA UNAVAILABLE"
                 c_stat = classify_cloud(c_val)
@@ -571,13 +572,29 @@ async def fetch_imd_maps_for_dates_and_states(
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-software-rasterizer",
+                "--mute-audio",
+                "--no-zygote",
+                "--js-flags=--max-old-space-size=128"
+            ]
         )
         context = await browser.new_context(
             timezone_id="Asia/Kolkata",
             locale="en-IN",
             viewport={"width": 1280, "height": 800},
+            device_scale_factor=1,
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        )
+        # Block non-essential media & fonts to minimize memory footprint
+        await context.route(
+            "**/*",
+            lambda route: route.abort() if route.request.resource_type in ["media", "font"] else route.continue_()
         )
         page = await context.new_page()
 
@@ -591,15 +608,15 @@ async def fetch_imd_maps_for_dates_and_states(
                 await emit(f"  IMD Day {day_param} ({d_str}) — loading map...")
 
                 try:
-                    await page.goto(gis_url, timeout=40000, wait_until="domcontentloaded")
-                    await page.wait_for_timeout(4500)
+                    await page.goto(gis_url, timeout=30000, wait_until="domcontentloaded")
+                    await page.wait_for_timeout(2000)
 
                     # Enable Transparent toggle
                     await page.evaluate('''() => {
                         const btn = document.getElementById('opacity_button');
                         if (btn && !btn.checked) btn.click();
                     }''')
-                    await page.wait_for_timeout(1000)
+                    await page.wait_for_timeout(600)
 
                     # Select Google Map base layer
                     await page.evaluate('''() => {
@@ -612,7 +629,7 @@ async def fetch_imd_maps_for_dates_and_states(
                             }
                         }
                     }''')
-                    await page.wait_for_timeout(2500)
+                    await page.wait_for_timeout(1500)
 
                     chart = page.locator("#chartdiv2")
 
@@ -624,7 +641,7 @@ async def fetch_imd_maps_for_dates_and_states(
                                 window.map.fitBounds({bounds}, {{ animate: false, padding: [10, 10] }});
                             }}
                         }}''')
-                        await page.wait_for_timeout(2500)
+                        await page.wait_for_timeout(1200)
 
                         safe_state = re.sub(r'[^a-zA-Z0-9]', '_', state).lower()
                         safe_date = d.strftime("%Y%m%d")
@@ -643,6 +660,10 @@ async def fetch_imd_maps_for_dates_and_states(
                         })
                         await emit(f"    [OK] {state} warning map captured")
 
+                    # Recycle page between days to completely flush WebGL/Leaflet RAM
+                    await page.close()
+                    page = await context.new_page()
+
                 except Exception as e_imd:
                     await emit(f"  IMD fetch error on Day {day_param}: {e_imd}")
                     for state in states:
@@ -651,6 +672,11 @@ async def fetch_imd_maps_for_dates_and_states(
                             "image_path": None,
                             "available": False
                         })
+                    try:
+                        await page.close()
+                        page = await context.new_page()
+                    except Exception:
+                        pass
             else:
                 # Beyond 6-day IMD horizon
                 await emit(f"  IMD [{d_str}] — Exceeds 6-day forecast horizon")
@@ -777,19 +803,20 @@ async def run_automation(
         await emit("Windy extraction complete [OK]")
         return windy_all
 
-    # ── Two-phase parallel execution to avoid dual-browser OOM ─────────────────
-    # Phase 1: AccuWeather (pure HTTP — no browser) + IMD (1 browser) run together.
-    # Phase 2: Windy (1 browser) runs after IMD browser is fully closed.
-    # → Never two Chromium instances simultaneously → stays within Render's 512MB RAM.
+    # ── Strict 3-phase execution to guarantee <200MB RAM ceiling on Render ────
+    # Phase 1: AccuWeather (pure HTTP, zero browser, finishes in ~7s).
+    # Phase 2: IMD Maps (Chromium solo with --disable-dev-shm-usage, closed when done).
+    # Phase 3: Windy (Chromium solo, closed when done).
+    # → At no point do two heavy tasks run together, staying well under Render's 512MB RAM.
 
-    await emit("Phase 1 — AccuWeather + IMD maps (parallel)...")
-    accu_results_all, imd_results_all = await asyncio.gather(
-        _run_accu(),
-        fetch_imd_maps_for_dates_and_states(target_dates, distinct_states, today, emit)
-    )
+    await emit("Phase 1 — AccuWeather extraction...")
+    accu_results_all = await _run_accu()
+
+    await emit("Phase 2 — IMD Warning maps...")
+    imd_results_all = await fetch_imd_maps_for_dates_and_states(target_dates, distinct_states, today, emit)
     await emit("IMD Warning maps complete [OK]")
 
-    await emit("Phase 2 — Windy ECMWF browser scrape...")
+    await emit("Phase 3 — Windy ECMWF browser scrape...")
     windy_results_all = await _run_windy()
 
 

@@ -957,9 +957,12 @@
             spinner.style.display = 'block';
             btnLabel.textContent  = 'Automating…';
             panel.style.display   = 'block';
-            addLog('Reconnected to running job…', 'info');
-            const eta = calcEta();
-            startTimer(eta);
+            log.innerHTML         = '';
+            stepCount             = 0;
+            addLog('Reconnected to active automation…', 'info');
+            const totalEta = calcEta();
+            const remaining = Math.max(totalEta - Math.floor(s.elapsed || 0), 15);
+            startTimer(remaining);
             startPolling();
             connectSSE();
           }
