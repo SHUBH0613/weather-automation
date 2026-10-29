@@ -609,7 +609,15 @@
   const progressFill   = document.getElementById('progress-fill');
   const timerEta       = document.getElementById('timer-eta');
 
-  const API_BASE = window.location.protocol.startsWith('http') ? '' : 'http://127.0.0.1:5000';
+  let API_BASE = window.location.protocol.startsWith('http') ? '' : 'http://127.0.0.1:5000';
+  if (window.location.protocol === 'file:') {
+    // Auto-detect: if local python server isn't running, route to live Render cloud backend
+    fetch('http://127.0.0.1:5000/ping')
+      .catch(() => {
+        API_BASE = 'https://weather-automation-eonf.onrender.com';
+        console.log('[Offline HTML] Switched API_BASE to cloud:', API_BASE);
+      });
+  }
 
   // ── ETA calculation ─────────────────────────────────────────────────────────
   // ~35s AccuWeather overhead + 30s per location for Windy (ECMWF loads slower) + 40s IMD
