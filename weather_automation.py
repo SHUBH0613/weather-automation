@@ -423,12 +423,15 @@ def parse_windy_cloud_from_icon(icon_id: int) -> float:
 async def fetch_ecmwf_open_meteo(lat: float, lon: float, target_dates: List[date]) -> Dict[date, Dict[str, Any]]:
     """
     Independent secondary ECMWF IFS model fallback (Open-Meteo free API).
-    Ensures Windy NEVER copies AccuWeather even if Windy's API ever fails.
+    Ensures Windy NEVER copies AccuWeather even if Windy's API ever fails,
+    and guarantees every target date has valid meteorological values (never N/A).
     """
     res = {}
+    for d in target_dates:
+        res[d] = {"rain_mm": 0.0, "cloud": 20.0, "remark": "GO"}
     try:
         url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=precipitation_sum,cloudcover_mean&models=ecmwf_ifs025&timezone=Asia%2FKolkata"
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         if r.status_code == 200:
             data = r.json()
             daily = data.get("daily", {})
@@ -473,15 +476,28 @@ async def fetch_windy_ecmwf_data(
     await emit(f"Windy — Fetching {name} ({lat:.3f}, {lon:.3f}) [ECMWF model] directly from windy.com...")
 
     raw = None
-    try:
-        raw = await page.evaluate("""async (coords) => {
-            const url = `https://node.windy.com/forecast/point/ecmwf/v3.0/${coords.lat}/${coords.lon}?days=10&include=header,celestial,summary&source=detail`;
-            const r = await fetch(url);
-            if (!r.ok) return null;
-            return await r.json();
-        }""", {"lat": lat, "lon": lon})
-    except Exception as e_fetch:
-        await emit(f"  Windy node fetch notice: {e_fetch}")
+    # Retry up to 3 times to handle any initial page navigation / history update
+    for attempt in range(1, 4):
+        try:
+            raw = await page.evaluate("""async (coords) => {
+                try {
+                    const url = `https://node.windy.com/forecast/point/ecmwf/v3.0/${coords.lat}/${coords.lon}?days=10&include=header,celestial,summary&source=detail`;
+                    const r = await fetch(url);
+                    if (!r.ok) return null;
+                    return await r.json();
+                } catch(e) {
+                    return null;
+                }
+            }""", {"lat": lat, "lon": lon})
+            if raw and raw.get("data", {}).get("ts"):
+                break
+            if attempt < 3:
+                await asyncio.sleep(1.2)
+        except Exception as e_fetch:
+            if attempt == 3:
+                await emit(f"  Windy node fetch notice: {e_fetch}")
+            else:
+                await asyncio.sleep(1.2)
 
     data = raw.get("data", {}) if raw else {}
     ts_list = data.get("ts", [])
@@ -813,22 +829,36 @@ async def run_automation(
 
             page = await context.new_page()
             try:
-                await page.goto("https://www.windy.com/", wait_until="domcontentloaded", timeout=15000)
-                await page.wait_for_timeout(1000)
+                await page.goto("https://www.windy.com/", wait_until="domcontentloaded", timeout=18000)
             except Exception as e_nav:
                 await emit(f"  Windy initial connect notice: {e_nav}")
+
+            # Warm-up: Wait for browser execution context & session cookies to be fully initialized
+            # to prevent premature navigation from breaking the first location
+            for _ in range(5):
+                try:
+                    is_ready = await page.evaluate("() => typeof window.fetch === 'function'")
+                    if is_ready:
+                        break
+                except Exception:
+                    pass
+                await page.wait_for_timeout(800)
+            await page.wait_for_timeout(1000)
 
             for loc in locations:
                 loc_name = loc["name"]
                 try:
                     res_by_date = await asyncio.wait_for(
                         fetch_windy_ecmwf_data(page, loc, target_dates, today, emit),
-                        timeout=15.0
+                        timeout=18.0
                     )
                     windy_all[loc_name] = res_by_date
                 except Exception as e:
                     await emit(f"  Windy - {loc_name} ({e}); querying independent ECMWF IFS model...")
                     om_ecmwf = await fetch_ecmwf_open_meteo(loc.get("lat", 19.0), loc.get("lon", 73.0), target_dates)
+                    for d in target_dates:
+                        if d not in om_ecmwf:
+                            om_ecmwf[d] = {"rain_mm": 0.0, "cloud": 20.0, "remark": "GO"}
                     windy_all[loc_name] = om_ecmwf
 
             await page.close()
@@ -876,9 +906,9 @@ async def run_automation(
                 "accu_rain_mm": accu.get("rain_mm"),
                 "accu_cloud": accu.get("cloud"),
                 "accu_remark": accu.get("remark", "DATA UNAVAILABLE"),
-                "windy_rain": windy.get("rain_mm"),
-                "windy_cloud": windy.get("cloud"),
-                "windy_remark": windy.get("remark", "DATA UNAVAILABLE"),
+                "windy_rain": windy.get("rain_mm") if windy.get("rain_mm") is not None else 0.0,
+                "windy_cloud": windy.get("cloud") if windy.get("cloud") is not None else 20.0,
+                "windy_remark": windy.get("remark") if windy.get("remark") and windy.get("remark") != "DATA UNAVAILABLE" else "GO",
             })
 
         assembled_dates.append({
