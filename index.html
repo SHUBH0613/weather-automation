@@ -510,15 +510,6 @@
     </div>
   </div>
 
-  <!-- WhatsApp Delivery Toggle -->
-  <div style="margin: 14px 0 16px; display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; color: #94a3b8; background: rgba(34, 197, 94, 0.08); border: 1px solid rgba(34, 197, 94, 0.25); border-radius: 12px; padding: 11px 14px;">
-    <label style="display: flex; align-items: center; gap: 9px; cursor: pointer; user-select: none;">
-      <input type="checkbox" id="send-whatsapp-chk" checked style="accent-color: #22c55e; width: 16px; height: 16px; cursor: pointer;" />
-      <span>Send copy to WhatsApp (<strong style="color: #22c55e;">+91 7761866811</strong>)</span>
-    </label>
-    <span style="font-size: 11px; color: #22c55e; font-weight: 600;">Twilio</span>
-  </div>
-
   <!-- Action Button -->
   <button id="btn-get" onclick="startJob()">
     <span class="spinner" id="spinner"></span>
@@ -619,12 +610,40 @@
       });
   }
 
+  // ── Form State Persistence (localStorage) ──────────────────────────────────
+  function saveFormState() {
+    try {
+      localStorage.setItem('wx_selected_cities', JSON.stringify(selectedCities));
+      localStorage.setItem('wx_start_date', startDateInput.value);
+      localStorage.setItem('wx_end_date', endDateInput.value);
+    } catch(e) {}
+  }
+
+  function loadFormState() {
+    try {
+      const saved = localStorage.getItem('wx_selected_cities');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          selectedCities = parsed;
+        }
+      }
+      const sDate = localStorage.getItem('wx_start_date');
+      const eDate = localStorage.getItem('wx_end_date');
+      if (sDate && eDate) {
+        startDateInput.value = sDate;
+        endDateInput.value = eDate;
+        updateRangeLabel();
+      }
+    } catch(e) {}
+  }
+
   // ── ETA calculation ─────────────────────────────────────────────────────────
-  // ~35s AccuWeather overhead + 30s per location for Windy (ECMWF loads slower) + 40s IMD
+  // Pure AccuWeather (~8s) + IMD GIS (~2.5s per state/day) + Windy ECMWF (~4s per city)
   function calcEta() {
     const numCities = selectedCities.length || 5;
     const numDays   = Math.max(parseInt(rangeLabel.textContent) || 1, 1);
-    return 35 + (numCities * 30) + (numDays * 15) + 40;
+    return Math.max(35, 12 + (numCities * 6) + (numDays * 8));
   }
 
   function startTimer(totalSec) {
@@ -646,9 +665,9 @@
 
       if (remaining <= 0) {
         timerDigits.textContent = '00:00';
-        timerEta.textContent = 'Almost there — finalising…';
+        timerEta.textContent = 'Compiling slides & finalising PowerPoint presentation…';
       } else {
-        timerEta.textContent = `Started ${Math.floor(elapsed)}s ago · ~${Math.ceil(remaining)}s left`;
+        timerEta.textContent = `Elapsed ${Math.floor(elapsed)}s · ~${Math.ceil(remaining)}s remaining`;
       }
     }, 1000);
   }
@@ -667,9 +686,9 @@
     setTimeout(() => { timerBar.style.display = 'none'; }, 2500);
   }
 
-  // ── Mobile fallback polling ─────────────────────────────────────────────────
-  // On phones the browser can kill the SSE connection. Poll /status every 8s as safety net.
+  // ── Active status polling ───────────────────────────────────────────────────
   function startPolling() {
+    if (_pollInterval) clearInterval(_pollInterval);
     _pollInterval = setInterval(() => {
       fetch(`${API_BASE}/status`)
         .then(r => r.json())
@@ -684,7 +703,7 @@
           }
         })
         .catch(() => {});
-    }, 8000);
+    }, 3000);
   }
 
   // ── Date helpers ────────────────────────────────────────────────────────────
@@ -708,6 +727,7 @@
     const dd = String(end.getDate()).padStart(2, '0');
     endDateInput.value = `${yyyy}-${mm}-${dd}`;
     updateRangeLabel();
+    saveFormState();
   }
 
   function updateRangeLabel() {
@@ -724,8 +744,12 @@
       endDateInput.value = startDateInput.value;
     }
     updateRangeLabel();
+    saveFormState();
   });
-  endDateInput.addEventListener('change', updateRangeLabel);
+  endDateInput.addEventListener('change', () => {
+    updateRangeLabel();
+    saveFormState();
+  });
 
   // ── City chips ──────────────────────────────────────────────────────────────
   function renderChips() {
@@ -742,8 +766,16 @@
     cityCountEl.textContent = selectedCities.length;
   }
 
-  function removeCity(index) { selectedCities.splice(index, 1); renderChips(); }
-  function clearCities() { selectedCities = []; renderChips(); }
+  function removeCity(index) {
+    selectedCities.splice(index, 1);
+    renderChips();
+    saveFormState();
+  }
+  function clearCities() {
+    selectedCities = [];
+    renderChips();
+    saveFormState();
+  }
 
   function stripDiacritics(str) {
     if (!str) return '';
@@ -796,6 +828,7 @@
     if (!selectedCities.some(c => c.name.toLowerCase() === city.name.toLowerCase() && c.state === city.state)) {
       selectedCities.push(city);
       renderChips();
+      saveFormState();
     }
   }
 
@@ -840,21 +873,17 @@
     currentFilename          = null;
     _clearTimer();
 
-    // Start countdown with estimated duration
+    // Start countdown with calibrated duration
     const eta = calcEta();
     startTimer(eta);
-    startPolling();  // mobile safety net
+    startPolling();
 
     if (evtSource) { evtSource.close(); evtSource = null; }
 
-    const chkWa = document.getElementById('send-whatsapp-chk');
-    const sendWhatsApp = chkWa ? chkWa.checked : false;
     const payload = {
       locations: selectedCities,
       startDate: startDateInput.value,
-      endDate: endDateInput.value,
-      sendWhatsApp: sendWhatsApp,
-      phone: "+917761866811"
+      endDate: endDateInput.value
     };
 
     fetch(`${API_BASE}/get-data`, {
@@ -875,23 +904,40 @@
     if (evtSource) { evtSource.close(); evtSource = null; }
     evtSource = new EventSource(`${API_BASE}/progress`);
     evtSource.onmessage = e => {
-      const d = JSON.parse(e.data);
-      if (d.msg) {
-        const cls = classifyMsg(d.msg);
-        let display = d.msg.replace(/^DONE:.*/, 'PowerPoint presentation saved ✓');
-        addLog(display, cls);
-      }
-      if (d.done) {
-        currentFilename = d.filename;
-        evtSource.close();
-        jobDone(d.filename);
-      }
-      if (d.error) { evtSource.close(); showError(d.error); }
+      try {
+        const d = JSON.parse(e.data);
+        if (d.msg) {
+          const cls = classifyMsg(d.msg);
+          let display = d.msg.replace(/^DONE:.*/, 'PowerPoint presentation saved ✓');
+          addLog(display, cls);
+        }
+        if (d.done) {
+          currentFilename = d.filename;
+          if (evtSource) { evtSource.close(); evtSource = null; }
+          jobDone(d.filename);
+        }
+        if (d.error) {
+          if (evtSource) { evtSource.close(); evtSource = null; }
+          showError(d.error);
+        }
+      } catch(err) {}
     };
     evtSource.onerror = () => {
-      // SSE dropped (common on mobile) — the poll interval will catch completion
-      evtSource.close();
-      evtSource = null;
+      if (evtSource) { evtSource.close(); evtSource = null; }
+      // Reconnect if server says job is still in progress
+      fetch(`${API_BASE}/status`)
+        .then(r => r.json())
+        .then(s => {
+          if (s.running) {
+            setTimeout(connectSSE, 2000);
+          } else if (s.ppt_path && !currentFilename) {
+            const fname = s.ppt_path.split(/[\\\/]/).pop();
+            jobDone(fname);
+          } else if (s.error && !currentFilename) {
+            showError(s.error);
+          }
+        })
+        .catch(() => {});
     };
   }
 
@@ -937,6 +983,7 @@
   // ── On page load ─────────────────────────────────────────────────────────────
   window.addEventListener('DOMContentLoaded', () => {
     initDates();
+    loadFormState();
     renderChips();
 
     const wakeBanner = document.getElementById('wake-banner');
@@ -944,7 +991,6 @@
     const buildEl    = document.getElementById('build-label');
 
     // Cold-start detection: measure how long /status takes to respond.
-    // If > 2.5s the server was sleeping → show the wake-up banner until it's ready.
     const t0 = Date.now();
     let wakeCheckInterval = null;
 
@@ -952,9 +998,6 @@
       fetch(`${API_BASE}/status`)
         .then(r => r.json())
         .then(s => {
-          const elapsed = Date.now() - t0;
-
-          // Populate build info
           if (buildEl && s.build) buildEl.textContent = `Build ${s.build}`;
 
           // Server responded — hide banner
@@ -969,11 +1012,11 @@
             spinner.style.display = 'block';
             btnLabel.textContent  = 'Automating…';
             panel.style.display   = 'block';
-            log.innerHTML         = '';
-            stepCount             = 0;
-            addLog('Reconnected to active automation…', 'info');
+            if (log.children.length === 0) {
+              addLog('Reconnected to active automation…', 'info');
+            }
             const totalEta = calcEta();
-            const remaining = Math.max(totalEta - Math.floor(s.elapsed || 0), 15);
+            const remaining = Math.max(totalEta - Math.floor(s.elapsed || 0), 10);
             startTimer(remaining);
             startPolling();
             connectSSE();
@@ -987,43 +1030,14 @@
             if (wakeMsg) wakeMsg.textContent = `Server is waking up from sleep — ${elapsed}s elapsed, ready soon…`;
           }
           if (buildEl) buildEl.textContent = 'Server starting up…';
+          if (!wakeCheckInterval) {
+            wakeCheckInterval = setInterval(checkServerReady, 3500);
+          }
         });
     }
 
-    // First check immediately
-    const firstCheck = fetch(`${API_BASE}/status`)
-      .then(r => {
-        const elapsed = Date.now() - t0;
-        if (elapsed > 2500 && wakeBanner) {
-          // Slow first response — was a cold start
-          wakeBanner.classList.remove('hidden');
-          if (wakeMsg) wakeMsg.textContent = 'Server woke from sleep — initialising…';
-          setTimeout(() => wakeBanner.classList.add('hidden'), 3000);
-        }
-        return r.json();
-      })
-      .then(s => {
-        if (buildEl && s.build) buildEl.textContent = `Build ${s.build}`;
-        if (s.ppt_path && !s.running) {
-          const fname = s.ppt_path.split(/[\\\/]/).pop();
-          jobDone(fname);
-        } else if (s.running) {
-          btnGet.disabled       = true;
-          spinner.style.display = 'block';
-          btnLabel.textContent  = 'Automating…';
-          panel.style.display   = 'block';
-          addLog('Reconnected to running job…', 'info');
-          startTimer(calcEta());
-          startPolling();
-          connectSSE();
-        }
-      })
-      .catch(() => {
-        // Server completely down / cold start — show banner and retry every 4s
-        if (wakeBanner) wakeBanner.classList.remove('hidden');
-        if (buildEl) buildEl.textContent = 'Server starting up…';
-        wakeCheckInterval = setInterval(checkServerReady, 4000);
-      });
+    // Check immediately
+    checkServerReady();
   });
 
 

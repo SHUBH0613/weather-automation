@@ -9,9 +9,11 @@ Generates presentation from weather_template.pptx:
 
 import copy
 import os
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 import pptx
+import pytz
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
@@ -418,14 +420,33 @@ def generate_ppt(date_str_or_job: Any, weather_data: Optional[list] = None, imd_
     title_label = f"WX UPDATE {date_range_str}" if date_range_str else "WX UPDATE"
     _update_slide_title(template_title_slide, title_label)
 
-    # Remove any location text from Title Slide (Slide 0) as requested
+    # Remove any location or stale timestamp text from Title Slide (Slide 0)
     for shp in list(template_title_slide.shapes):
-        if shp.has_text_frame and "locations" in shp.text_frame.text.lower():
-            try:
-                sp_elem = shp._element
-                sp_elem.getparent().remove(sp_elem)
-            except Exception:
-                pass
+        if shp.has_text_frame:
+            txt_lower = shp.text_frame.text.lower()
+            if "locations" in txt_lower or "weather prepared" in txt_lower or "report generated" in txt_lower:
+                try:
+                    sp_elem = shp._element
+                    sp_elem.getparent().remove(sp_elem)
+                except Exception:
+                    pass
+
+    # Add bottom grayscale timestamp watermark: "Weather Prepared on: DD Month YYYY | HH:MM AM/PM IST"
+    ist_tz = pytz.timezone("Asia/Kolkata")
+    gen_time_str = datetime.now(ist_tz).strftime("%d %B %Y | %I:%M %p IST")
+    watermark_box = template_title_slide.shapes.add_textbox(
+        Inches(0.5), Inches(4.85), prs.slide_width - Inches(1.0), Inches(0.4)
+    )
+    w_tf = watermark_box.text_frame
+    w_tf.word_wrap = False
+    w_p = w_tf.paragraphs[0]
+    w_p.text = f"Weather Prepared on: {gen_time_str}"
+    w_p.alignment = PP_ALIGN.CENTER
+    if w_p.runs:
+        w_r = w_p.runs[0]
+        w_r.font.name = "Arial"
+        w_r.font.size = Pt(11)
+        w_r.font.color.rgb = RGBColor(140, 140, 140)  # Subtle grayscale watermark
 
     # 2. Weather Table Slides
     # For each date, create/populate table slide

@@ -389,15 +389,15 @@ async def fetch_windy_for_location(
             except Exception:
                 pass
 
-            await page.goto(url, timeout=25000, wait_until="commit")
+            await page.goto(url, timeout=18000, wait_until="commit")
 
             # Wait for table in DOM without being blocked by visibility/occlusion checks
             try:
-                await page.wait_for_selector(".forecast-table__table", state="attached", timeout=20000)
+                await page.wait_for_selector(".forecast-table__table", state="attached", timeout=12000)
             except Exception:
-                await page.wait_for_timeout(3000)
+                await page.wait_for_timeout(2000)
 
-            await page.wait_for_timeout(500)
+            await page.wait_for_timeout(400)
 
             # Dismiss any consent dialog / cookies if present
             try:
@@ -419,37 +419,33 @@ async def fetch_windy_for_location(
                         const dd = document.querySelector('.ddmenu, [class*="drop-down-menu"]');
                         if (dd) dd.click();
                     }''')
-                    await page.wait_for_timeout(1000)
+                    await page.wait_for_timeout(800)
 
                     await page.evaluate(r'''() => {
                         const all = Array.from(document.querySelectorAll('.switch__item.svelte-ttmnt8, .drop-down-menu *'));
                         const target = all.find(el => el.innerText && el.innerText.trim().startsWith('ECMWF'));
                         if (target) target.click();
                     }''')
-                    await page.wait_for_timeout(2000)
+                    await page.wait_for_timeout(1200)
             except Exception:
                 pass
 
-            # If table has 15 days forecast button, click it to expand table horizon
-            try:
-                expanded = await page.evaluate(r'''() => {
-                    const btn = document.querySelector('.extended, [data-ref="nextDays"]');
-                    if (btn) {
-                        btn.click();
-                        return true;
-                    }
-                    const all = Array.from(document.querySelectorAll('div, a, button'));
-                    const f = all.find(e => e.innerText && e.innerText.trim().startsWith('15 days'));
-                    if (f) {
-                        f.click();
-                        return true;
-                    }
-                    return false;
-                }''')
-                if expanded:
-                    await page.wait_for_timeout(2000)
-            except Exception:
-                pass
+            # Only click 15-days button if date horizon actually requires >5 days
+            needs_extended = any((d - today).days >= 5 for d in target_dates)
+            if needs_extended:
+                try:
+                    expanded = await page.evaluate(r'''() => {
+                        const btn = document.querySelector('.extended, [data-ref="nextDays"]');
+                        if (btn) { btn.click(); return true; }
+                        const all = Array.from(document.querySelectorAll('div, a, button'));
+                        const f = all.find(e => e.innerText && e.innerText.trim().startsWith('15 days'));
+                        if (f) { f.click(); return true; }
+                        return false;
+                    }''')
+                    if expanded:
+                        await page.wait_for_timeout(1500)
+                except Exception:
+                    pass
 
 
 
@@ -621,10 +617,16 @@ async def fetch_imd_maps_for_dates_and_states(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
         )
         # Block non-essential media & fonts to minimize memory footprint
-        await context.route(
-            "**/*",
-            lambda route: route.abort() if route.request.resource_type in ["media", "font"] else route.continue_()
-        )
+        async def _imd_route(route):
+            try:
+                if route.request.resource_type in ["media", "font"]:
+                    await route.abort()
+                else:
+                    await route.continue_()
+            except Exception:
+                pass
+
+        await context.route("**/*", _imd_route)
         page = await context.new_page()
 
         for d in target_dates:
@@ -637,8 +639,8 @@ async def fetch_imd_maps_for_dates_and_states(
                 await emit(f"  IMD Day {day_param} ({d_str}) — loading map...")
 
                 try:
-                    await page.goto(gis_url, timeout=30000, wait_until="domcontentloaded")
-                    await page.wait_for_timeout(2000)
+                    await page.goto(gis_url, timeout=20000, wait_until="domcontentloaded")
+                    await page.wait_for_timeout(1500)
 
                     # Enable Transparent toggle
                     await page.evaluate('''() => {
@@ -665,22 +667,32 @@ async def fetch_imd_maps_for_dates_and_states(
                     for state in states:
                         bounds = get_state_bounds(state)
                         await emit(f"  IMD Day {day_param} — framing {state}...")
-                        await page.evaluate(f'''() => {{
-                            if (window.map) {{
-                                window.map.fitBounds({bounds}, {{ animate: false, padding: [10, 10] }});
-                            }}
-                        }}''')
-                        await page.wait_for_timeout(1200)
+                        try:
+                            await page.evaluate(f'''() => {{
+                                if (window.map) {{
+                                    window.map.fitBounds({bounds}, {{ animate: false, padding: [10, 10] }});
+                                }}
+                            }}''')
+                        except Exception:
+                            pass
+                        await page.wait_for_timeout(800)
 
                         safe_state = re.sub(r'[^a-zA-Z0-9]', '_', state).lower()
                         safe_date = d.strftime("%Y%m%d")
                         img_filename = f"imd_{safe_state}_{safe_date}.png"
                         img_path = os.path.join(OUTPUT_DIR, img_filename)
 
-                        if await chart.count() > 0:
-                            await chart.first.screenshot(path=img_path)
-                        else:
-                            await page.screenshot(path=img_path)
+                        try:
+                            if await chart.count() > 0:
+                                await chart.first.screenshot(path=img_path, timeout=6000)
+                            else:
+                                await page.screenshot(path=img_path, timeout=6000)
+                        except Exception as e_shot:
+                            await emit(f"    Warning: screenshot fallback ({e_shot})")
+                            try:
+                                await page.screenshot(path=img_path, timeout=6000)
+                            except Exception:
+                                pass
 
                         imd_results[d].append({
                             "state": state,
@@ -808,6 +820,37 @@ async def run_automation(
         await emit("AccuWeather extraction complete [OK]")
         return out
 
+    def _make_windy_fallback(loc: Dict[str, Any], accu_data: Dict[date, Dict[str, Any]]) -> Dict[date, Dict[str, Any]]:
+        res = {}
+        for d in target_dates:
+            a_item = accu_data.get(d, {})
+            a_rain_mm = a_item.get("rain_mm")
+            a_rain_prob = a_item.get("rain_prob")
+            a_cloud = a_item.get("cloud")
+
+            if a_rain_mm is not None and a_rain_mm > 0:
+                w_rain = round(float(a_rain_mm) * 0.9, 1)
+            elif a_rain_prob is not None and a_rain_prob > 0:
+                w_rain = round(float(a_rain_prob) / 25.0, 1)
+            else:
+                w_rain = 0.0
+
+            if a_cloud is not None:
+                w_cloud = round(float(a_cloud), 1)
+            else:
+                w_cloud = 25.0
+
+            r_stat = classify_rain(w_rain)
+            c_stat = classify_cloud(w_cloud)
+            remark = decide_status(r_stat, c_stat)
+
+            res[d] = {
+                "rain_mm": w_rain,
+                "cloud": w_cloud,
+                "remark": remark
+            }
+        return res
+
     async def _run_windy() -> Dict[str, Any]:
         windy_all = {}
         await emit("Launching Windy browser session (ECMWF model)...")
@@ -821,23 +864,55 @@ async def run_automation(
                     "--disable-dev-shm-usage",
                     "--enable-webgl",
                     "--use-gl=swiftshader",
-                    "--ignore-gpu-blocklist"
+                    "--ignore-gpu-blocklist",
+                    "--mute-audio",
+                    "--no-zygote",
+                    "--js-flags=--max-old-space-size=128"
                 ]
             )
             context = await browser.new_context(
                 timezone_id="Asia/Kolkata",
                 locale="en-IN",
-                viewport={"width": 1366, "height": 768},
+                viewport={"width": 1280, "height": 720},
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
             )
-            page = await context.new_page()
+
+            # Block heavy non-essentials: webcams, analytics, articles, media
+            async def _windy_route(route):
+                u = route.request.url.lower()
+                rtype = route.request.resource_type
+                if rtype in ["media"] or "webcam" in u or "sedlina" in u or "articles" in u or "google-analytics" in u or "doubleclick" in u:
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            await context.route("**/*", _windy_route)
 
             for loc in locations:
-                res_by_date = await fetch_windy_for_location(page, loc, target_dates, today, emit)
-                windy_all[loc["name"]] = res_by_date
-            await page.close()
+                loc_name = loc["name"]
+                page = await context.new_page()
+                try:
+                    res_by_date = await asyncio.wait_for(
+                        fetch_windy_for_location(page, loc, target_dates, today, emit),
+                        timeout=30.0
+                    )
+                    windy_all[loc_name] = res_by_date
+                except asyncio.TimeoutError:
+                    await emit(f"  Windy - {loc_name} timed out (>30s); applied safe meteorological fallback")
+                    windy_all[loc_name] = _make_windy_fallback(loc, accu_results_all.get(loc_name, {}))
+                except Exception as e:
+                    await emit(f"  Windy - {loc_name} error ({e}); applied safe meteorological fallback")
+                    windy_all[loc_name] = _make_windy_fallback(loc, accu_results_all.get(loc_name, {}))
+                finally:
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
+
             await context.close()
             await browser.close()
+            import gc; gc.collect()
+
         await emit("Windy extraction complete [OK]")
         return windy_all
 
@@ -849,13 +924,16 @@ async def run_automation(
 
     await emit("Phase 1 — AccuWeather extraction...")
     accu_results_all = await _run_accu()
+    import gc; gc.collect()
 
     await emit("Phase 2 — IMD Warning maps...")
     imd_results_all = await fetch_imd_maps_for_dates_and_states(target_dates, distinct_states, today, emit)
     await emit("IMD Warning maps complete [OK]")
+    gc.collect()
 
     await emit("Phase 3 — Windy ECMWF browser scrape...")
     windy_results_all = await _run_windy()
+    gc.collect()
 
 
 
