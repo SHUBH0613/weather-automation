@@ -646,11 +646,28 @@
   }
 
   // ── ETA calculation ─────────────────────────────────────────────────────────
-  // Pure AccuWeather (~8s) + IMD GIS (~2.5s per state/day) + Windy ECMWF (~4s per city)
+  // AccuWeather (~6s) + IMD GIS (~14s per day) + Windy ECMWF (~5s total) + PPT (~4s) + buffer
   function calcEta() {
-    const numCities = selectedCities.length || 5;
+    const numCities = selectedCities.length || 4;
     const numDays   = Math.max(parseInt(rangeLabel.textContent) || 1, 1);
-    return Math.max(35, 12 + (numCities * 6) + (numDays * 8));
+    return Math.max(45, 18 + (numDays * 15) + (numCities * 2));
+  }
+
+  function adjustTimerPhase(msg) {
+    if (!msg || !_jobStartTime) return;
+    const numDays = Math.max(parseInt(rangeLabel.textContent) || 1, 1);
+    const elapsed = (Date.now() - _jobStartTime) / 1000;
+
+    if (msg.includes('Phase 2') || msg.includes('IMD Warning maps')) {
+      const needed = Math.max(25, numDays * 14 + 10);
+      if (_etaSeconds - elapsed < needed) {
+        _etaSeconds = elapsed + needed;
+      }
+    } else if (msg.includes('Phase 3') || msg.includes('Windy ECMWF')) {
+      _etaSeconds = Math.max(_etaSeconds, elapsed + 10);
+    } else if (msg.includes('Compiling') || msg.includes('Generating') || msg.includes('PowerPoint')) {
+      _etaSeconds = Math.max(_etaSeconds, elapsed + 4);
+    }
   }
 
   function startTimer(totalSec) {
@@ -662,17 +679,21 @@
 
     _timerInterval = setInterval(() => {
       const elapsed  = (Date.now() - _jobStartTime) / 1000;
-      const remaining = Math.max(0, _etaSeconds - elapsed);
-      const pct = Math.min(100, (elapsed / _etaSeconds) * 100);
+      let remaining = Math.max(0, _etaSeconds - elapsed);
 
+      // Prevent premature 00:00 while backend job is still actively running
+      if (!currentFilename && remaining < 3) {
+        remaining = 3;
+      }
+
+      const pct = currentFilename ? 100 : Math.min(95, (elapsed / Math.max(_etaSeconds, elapsed + remaining)) * 100);
       const m = String(Math.floor(remaining / 60)).padStart(2, '0');
       const s = String(Math.floor(remaining % 60)).padStart(2, '0');
       timerDigits.textContent = `${m}:${s}`;
       progressFill.style.width = `${pct}%`;
 
-      if (remaining <= 0) {
-        timerDigits.textContent = '00:00';
-        timerEta.textContent = 'Compiling slides & finalising PowerPoint presentation…';
+      if (remaining <= 3 && !currentFilename) {
+        timerEta.textContent = 'Processing live weather data & preparing slides…';
       } else {
         timerEta.textContent = `Elapsed ${Math.floor(elapsed)}s · ~${Math.ceil(remaining)}s remaining`;
       }
@@ -689,7 +710,7 @@
     timerDigits.textContent = '✓ Done';
     progressFill.style.width = '100%';
     progressFill.style.transition = 'width 0.4s ease';
-    timerEta.textContent = '';
+    timerEta.textContent = 'PowerPoint presentation ready for download';
     setTimeout(() => { timerBar.style.display = 'none'; }, 2500);
   }
 
@@ -917,6 +938,7 @@
           const cls = classifyMsg(d.msg);
           let display = d.msg.replace(/^DONE:.*/, 'PowerPoint presentation saved ✓');
           addLog(display, cls);
+          adjustTimerPhase(d.msg);
         }
         if (d.done) {
           currentFilename = d.filename;

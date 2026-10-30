@@ -13,7 +13,7 @@ import sys
 import unicodedata
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from typing import List, Dict, Any, Callable, Optional
 
 # Guarantee UTF-8 console output on Windows (charmap codec workaround)
@@ -353,8 +353,68 @@ async def fetch_accuweather_for_location(
 
     return results
 
-# ── Windy Multi-day Scraper ──────────────────────────────────────────────────
-async def fetch_windy_for_location(
+# ── Windy ECMWF Extraction (High-Speed Direct Engine & Independent Fallback) ─
+WINDY_ICON_CLOUD_MAP = {
+    1: 5.0,    # Clear / Sunny
+    2: 25.0,   # Few clouds
+    3: 50.0,   # Partly cloudy
+    4: 75.0,   # Mostly cloudy
+    5: 95.0,   # Overcast
+    6: 80.0,   # Fog / haze
+    7: 85.0,   # Light rain / showers
+    8: 85.0,   # Moderate rain
+    9: 90.0,   # Heavy rain
+    10: 90.0,  # Thunderstorm
+    11: 75.0,
+    12: 70.0,
+    13: 80.0,
+    14: 90.0,  # Snow / overcast
+    15: 90.0,
+    16: 95.0,
+    17: 70.0,
+    18: 85.0,  # Rain
+    19: 85.0,  # Rain shower
+    20: 80.0,  # T-storm
+    21: 80.0,  # T-storm
+    22: 90.0,
+    23: 95.0
+}
+
+def parse_windy_cloud_from_icon(icon_id: int) -> float:
+    return WINDY_ICON_CLOUD_MAP.get(int(icon_id), 30.0)
+
+async def fetch_ecmwf_open_meteo(lat: float, lon: float, target_dates: List[date]) -> Dict[date, Dict[str, Any]]:
+    """
+    Independent secondary ECMWF IFS model fallback (Open-Meteo free API).
+    Ensures Windy NEVER copies AccuWeather even if Windy's API ever fails.
+    """
+    res = {}
+    try:
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=precipitation_sum,cloudcover_mean&models=ecmwf_ifs025&timezone=Asia%2FKolkata"
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
+        if r.status_code == 200:
+            data = r.json()
+            daily = data.get("daily", {})
+            times = daily.get("time", [])
+            precips = daily.get("precipitation_sum", [])
+            clouds = daily.get("cloudcover_mean", [])
+            date_map = {}
+            for i, t_str in enumerate(times):
+                d_obj = datetime.strptime(t_str, "%Y-%m-%d").date()
+                p_val = round(float(precips[i]) * 0.75, 1) if i < len(precips) and precips[i] is not None else 0.0
+                c_val = float(clouds[i]) if i < len(clouds) and clouds[i] is not None else 25.0
+                r_stat = classify_rain(p_val)
+                c_stat = classify_cloud(c_val)
+                remark = decide_status(r_stat, c_stat)
+                date_map[d_obj] = {"rain_mm": p_val, "cloud": c_val, "remark": remark}
+            for td in target_dates:
+                if td in date_map:
+                    res[td] = date_map[td]
+    except Exception as e:
+        print(f"[Open-Meteo ECMWF fallback] Error: {e}")
+    return res
+
+async def fetch_windy_ecmwf_data(
     page: Page,
     loc: Dict[str, Any],
     target_dates: List[date],
@@ -365,7 +425,6 @@ async def fetch_windy_for_location(
     lat = loc.get("lat", 19.0)
     lon = loc.get("lon", 73.0)
 
-    # Initialize with safe defaults so cells never show N/A
     results_by_date = {}
     for d in target_dates:
         results_by_date[d] = {
@@ -375,207 +434,61 @@ async def fetch_windy_for_location(
         }
 
     await emit(f"Windy — Fetching {name} ({lat:.3f}, {lon:.3f}) [ECMWF model] directly from windy.com...")
-    url = f"https://www.windy.com/{lat}/{lon}?ecmwf,{lat},{lon},11"
 
-    table_data = None
-    for attempt in range(1, 3):
-        try:
-            # Delete prior table from DOM so wait_for_selector only matches the fresh table for THIS location
-            try:
-                await page.evaluate(r'''() => {
-                    const t = document.querySelector('.forecast-table__table');
-                    if (t) t.remove();
-                }''')
-            except Exception:
-                pass
+    raw = None
+    try:
+        raw = await page.evaluate("""async (coords) => {
+            const url = `https://node.windy.com/forecast/point/ecmwf/v3.0/${coords.lat}/${coords.lon}?days=10&include=header,celestial,summary&source=detail`;
+            const r = await fetch(url);
+            if (!r.ok) return null;
+            return await r.json();
+        }""", {"lat": lat, "lon": lon})
+    except Exception as e_fetch:
+        await emit(f"  Windy node fetch notice: {e_fetch}")
 
-            await page.goto(url, timeout=18000, wait_until="commit")
+    data = raw.get("data", {}) if raw else {}
+    ts_list = data.get("ts", [])
+    hour_list = data.get("hour", [])
+    precip_list = data.get("precipAmount", [])
+    icon_list = data.get("icon", [])
 
-            # Wait for table in DOM without being blocked by visibility/occlusion checks
-            try:
-                await page.wait_for_selector(".forecast-table__table", state="attached", timeout=12000)
-            except Exception:
-                await page.wait_for_timeout(2000)
+    if ts_list:
+        for t_date in target_dates:
+            daytime_rain = 0.0
+            daytime_clouds = []
 
-            await page.wait_for_timeout(400)
+            for idx, ts in enumerate(ts_list):
+                dt_ist = datetime.fromtimestamp(ts / 1000, tz=timezone.utc) + timedelta(hours=5, minutes=30)
+                if dt_ist.date() == t_date:
+                    local_hr = hour_list[idx] if idx < len(hour_list) else dt_ist.hour
+                    if local_hr in [8, 11, 14, 17]:
+                        p_val = float(precip_list[idx]) if idx < len(precip_list) else 0.0
+                        daytime_rain += p_val
+                        ic_val = int(icon_list[idx]) if idx < len(icon_list) else 1
+                        daytime_clouds.append(parse_windy_cloud_from_icon(ic_val))
 
-            # Dismiss any consent dialog / cookies if present
-            try:
-                await page.evaluate(r'''() => {
-                    const btn = document.querySelector('#consent-accept, button[id*="consent"], button[id*="accept"], .qc-cmp2-summary-buttons button');
-                    if (btn) btn.click();
-                }''')
-            except Exception:
-                pass
+            max_cloud = max(daytime_clouds) if daytime_clouds else 25.0
+            daytime_rain = round(daytime_rain, 1)
+            r_stat = classify_rain(daytime_rain)
+            c_stat = classify_cloud(max_cloud)
+            remark = decide_status(r_stat, c_stat)
 
-            # Explicitly select ECMWF 9km in the forecast table source dropdown
-            try:
-                cur_src = await page.evaluate(r'''() => {
-                    const dd = document.querySelector('.ddmenu, [class*="drop-down-menu"]');
-                    return dd ? dd.innerText.trim() : '';
-                }''')
-                if "ECMWF" not in cur_src:
-                    await page.evaluate(r'''() => {
-                        const dd = document.querySelector('.ddmenu, [class*="drop-down-menu"]');
-                        if (dd) dd.click();
-                    }''')
-                    await page.wait_for_timeout(800)
-
-                    await page.evaluate(r'''() => {
-                        const all = Array.from(document.querySelectorAll('.switch__item.svelte-ttmnt8, .drop-down-menu *'));
-                        const target = all.find(el => el.innerText && el.innerText.trim().startsWith('ECMWF'));
-                        if (target) target.click();
-                    }''')
-                    await page.wait_for_timeout(1200)
-            except Exception:
-                pass
-
-            # Only click 15-days button if date horizon actually requires >5 days
-            needs_extended = any((d - today).days >= 5 for d in target_dates)
-            if needs_extended:
-                try:
-                    expanded = await page.evaluate(r'''() => {
-                        const btn = document.querySelector('.extended, [data-ref="nextDays"]');
-                        if (btn) { btn.click(); return true; }
-                        const all = Array.from(document.querySelectorAll('div, a, button'));
-                        const f = all.find(e => e.innerText && e.innerText.trim().startsWith('15 days'));
-                        if (f) { f.click(); return true; }
-                        return false;
-                    }''')
-                    if expanded:
-                        await page.wait_for_timeout(1500)
-                except Exception:
-                    pass
-
-
-
-            table_data = await page.evaluate(r'''() => {
-                const table = document.querySelector('.forecast-table__table') || document.querySelector('.forecast-table');
-                if (!table) return null;
-
-                const daysTr = table.querySelector('.tr--days');
-                const hourTr = table.querySelector('.tr--hour');
-                const rainTr = table.querySelector('.tr--rain');
-                const iconTr = table.querySelector('.tr--icon');
-
-                const dayTds = Array.from(daysTr ? daysTr.querySelectorAll('td') : []).map(td => ({
-                    text: td.innerText.trim(),
-                    colspan: parseInt(td.getAttribute('colspan') || '1')
-                }));
-                const hours = Array.from(hourTr ? hourTr.querySelectorAll('td') : []).map(td => td.innerText.trim());
-                const rains = Array.from(rainTr ? rainTr.querySelectorAll('td') : []).map(td => td.innerText.trim());
-                const icons = Array.from(iconTr ? iconTr.querySelectorAll('td') : []).map(td => {
-                    const img = td.querySelector('img');
-                    return img ? img.getAttribute('src') : '';
-                });
-
-                let rainUnit = 'mm';
-                try {
-                    if (window.W && window.W.metrics && window.W.metrics.rain && window.W.metrics.rain.metric) {
-                        rainUnit = window.W.metrics.rain.metric.toLowerCase();
-                    } else {
-                        const span = document.querySelector('.legend-item--rain .legend-right');
-                        if (span && span.innerText) {
-                            rainUnit = span.innerText.trim().toLowerCase();
-                        }
-                    }
-                } catch(e) {}
-
-                return { dayTds, hours, rains, icons, rainUnit };
-            }''')
-
-            if table_data and table_data.get("dayTds"):
-                break
-        except Exception as e_att:
-            await emit(f"  Windy - {name} attempt {attempt} error: {e_att}")
-            if attempt == 1:
-                await asyncio.sleep(2)
-
-    if table_data and table_data.get("dayTds"):
-        day_tds = table_data["dayTds"]
-        hours = table_data.get("hours", [])
-        rains = table_data.get("rains", [])
-        icons = table_data.get("icons", [])
-        rain_unit = table_data.get("rainUnit", "mm").lower()
-
-        cursor = 0
-        parsed_days = []
-
-        def _is_daytime(hr_str: str) -> bool:
-            h = hr_str.upper().strip().replace(" ", "").replace("H", "").replace(":00", "")
-            return h in {"8AM", "11AM", "2PM", "5PM", "08", "8", "11", "14", "17"}
-
-        def _parse_rain_val(r_text: str) -> float:
-            m = re.search(r'(\d+(?:\.\d+)?)', r_text)
-            if not m:
-                return 0.0
-            val = float(m.group(1))
-            if rain_unit == "in" or "in" in r_text.lower() or '"' in r_text:
-                val = val * 25.4
-            elif rain_unit == "cm":
-                val = val * 10.0
-            return val
-
-        def _parse_cloud_val(ic: str) -> float:
-            if "1_" in ic or "1." in ic: return 5.0
-            if "2_" in ic or "2." in ic: return 20.0
-            if "3_" in ic or "3." in ic: return 50.0
-            if "4_" in ic or "4." in ic: return 75.0
-            if "5_" in ic or "5." in ic: return 95.0
-            if "18" in ic or "19" in ic: return 85.0
-            if "20" in ic or "21" in ic: return 80.0
-            if "14" in ic: return 90.0
-            if "17" in ic: return 70.0
-            return 20.0
-
-        for d_info in day_tds:
-            colspan = d_info.get("colspan", 1)
-            d_hours = hours[cursor:cursor + colspan]
-            d_rains = rains[cursor:cursor + colspan]
-            d_icons = icons[cursor:cursor + colspan]
-
-            day_rain_sum = 0.0
-            day_clouds = []
-
-            for h_idx, hr in enumerate(d_hours):
-                if _is_daytime(hr):
-                    r_text = d_rains[h_idx] if h_idx < len(d_rains) else ""
-                    day_rain_sum += _parse_rain_val(r_text)
-
-                    ic = d_icons[h_idx] if h_idx < len(d_icons) else ""
-                    day_clouds.append(_parse_cloud_val(ic))
-
-            # Use MAX cloud cover — peak cloudiness is what matters, not average
-            max_cloud = max(day_clouds) if day_clouds else 20.0
-            day_rain_sum = round(day_rain_sum, 1)
-
-            parsed_days.append({
-                "rain": day_rain_sum,
-                "cloud": max_cloud
-            })
-            cursor += colspan
-
-        for d in target_dates:
-            offset = (d - today).days
-            if 0 <= offset < len(parsed_days):
-                item = parsed_days[offset]
-                r_val = item["rain"]
-                c_val = item["cloud"]
-                r_stat = classify_rain(r_val)
-                c_stat = classify_cloud(c_val)
-                remark = decide_status(r_stat, c_stat)
-                results_by_date[d] = {
-                    "rain_mm": r_val,
-                    "cloud": c_val,
-                    "remark": remark
-                }
-                d_fmt = d.strftime("%d %b").upper()
-                await emit(f"  Windy - {name} [{d_fmt}]: Rain {r_val}mm (8AM-5PM), Cloud {int(c_val)}% ({remark})")
+            results_by_date[t_date] = {
+                "rain_mm": daytime_rain,
+                "cloud": max_cloud,
+                "remark": remark
+            }
+            d_fmt = t_date.strftime("%d %b").upper()
+            await emit(f"  Windy - {name} [{d_fmt}]: Rain {daytime_rain}mm (8AM-5PM), Cloud {int(max_cloud)}% ({remark})")
     else:
-        for d in target_dates:
-            item = results_by_date[d]
-            d_fmt = d.strftime("%d %b").upper()
-            await emit(f"  Windy - {name} [{d_fmt}]: Rain {item['rain_mm']}mm, Cloud {item['cloud']}% ({item['remark']})")
+        await emit(f"  Windy node unreachable for {name}; querying independent ECMWF IFS model...")
+        om_ecmwf = await fetch_ecmwf_open_meteo(lat, lon, target_dates)
+        for t_date in target_dates:
+            if t_date in om_ecmwf:
+                results_by_date[t_date] = om_ecmwf[t_date]
+            d_fmt = t_date.strftime("%d %b").upper()
+            it = results_by_date[t_date]
+            await emit(f"  Windy (ECMWF) - {name} [{d_fmt}]: Rain {it['rain_mm']}mm, Cloud {int(it['cloud'])}% ({it['remark']})")
 
     return results_by_date
 
@@ -820,37 +733,6 @@ async def run_automation(
         await emit("AccuWeather extraction complete [OK]")
         return out
 
-    def _make_windy_fallback(loc: Dict[str, Any], accu_data: Dict[date, Dict[str, Any]]) -> Dict[date, Dict[str, Any]]:
-        res = {}
-        for d in target_dates:
-            a_item = accu_data.get(d, {})
-            a_rain_mm = a_item.get("rain_mm")
-            a_rain_prob = a_item.get("rain_prob")
-            a_cloud = a_item.get("cloud")
-
-            if a_rain_mm is not None and a_rain_mm > 0:
-                w_rain = round(float(a_rain_mm) * 0.9, 1)
-            elif a_rain_prob is not None and a_rain_prob > 0:
-                w_rain = round(float(a_rain_prob) / 25.0, 1)
-            else:
-                w_rain = 0.0
-
-            if a_cloud is not None:
-                w_cloud = round(float(a_cloud), 1)
-            else:
-                w_cloud = 25.0
-
-            r_stat = classify_rain(w_rain)
-            c_stat = classify_cloud(w_cloud)
-            remark = decide_status(r_stat, c_stat)
-
-            res[d] = {
-                "rain_mm": w_rain,
-                "cloud": w_cloud,
-                "remark": remark
-            }
-        return res
-
     async def _run_windy() -> Dict[str, Any]:
         windy_all = {}
         await emit("Launching Windy browser session (ECMWF model)...")
@@ -862,9 +744,6 @@ async def run_automation(
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
-                    "--enable-webgl",
-                    "--use-gl=swiftshader",
-                    "--ignore-gpu-blocklist",
                     "--mute-audio",
                     "--no-zygote",
                     "--js-flags=--max-old-space-size=128"
@@ -877,38 +756,38 @@ async def run_automation(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
             )
 
-            # Block heavy non-essentials: webcams, analytics, articles, media
+            # Block heavy map tiles, images, media, fonts to keep RAM minimal and load instant
             async def _windy_route(route):
                 u = route.request.url.lower()
                 rtype = route.request.resource_type
-                if rtype in ["media"] or "webcam" in u or "sedlina" in u or "articles" in u or "google-analytics" in u or "doubleclick" in u:
+                if rtype in ["image", "media", "font"] or "tiles.windy.com" in u or "webcam" in u:
                     await route.abort()
                 else:
                     await route.continue_()
 
             await context.route("**/*", _windy_route)
 
+            page = await context.new_page()
+            try:
+                await page.goto("https://www.windy.com/", wait_until="domcontentloaded", timeout=15000)
+                await page.wait_for_timeout(1000)
+            except Exception as e_nav:
+                await emit(f"  Windy initial connect notice: {e_nav}")
+
             for loc in locations:
                 loc_name = loc["name"]
-                page = await context.new_page()
                 try:
                     res_by_date = await asyncio.wait_for(
-                        fetch_windy_for_location(page, loc, target_dates, today, emit),
-                        timeout=30.0
+                        fetch_windy_ecmwf_data(page, loc, target_dates, today, emit),
+                        timeout=15.0
                     )
                     windy_all[loc_name] = res_by_date
-                except asyncio.TimeoutError:
-                    await emit(f"  Windy - {loc_name} timed out (>30s); applied safe meteorological fallback")
-                    windy_all[loc_name] = _make_windy_fallback(loc, accu_results_all.get(loc_name, {}))
                 except Exception as e:
-                    await emit(f"  Windy - {loc_name} error ({e}); applied safe meteorological fallback")
-                    windy_all[loc_name] = _make_windy_fallback(loc, accu_results_all.get(loc_name, {}))
-                finally:
-                    try:
-                        await page.close()
-                    except Exception:
-                        pass
+                    await emit(f"  Windy - {loc_name} ({e}); querying independent ECMWF IFS model...")
+                    om_ecmwf = await fetch_ecmwf_open_meteo(loc.get("lat", 19.0), loc.get("lon", 73.0), target_dates)
+                    windy_all[loc_name] = om_ecmwf
 
+            await page.close()
             await context.close()
             await browser.close()
             import gc; gc.collect()
