@@ -424,32 +424,43 @@ async def fetch_ecmwf_open_meteo(lat: float, lon: float, target_dates: List[date
     """
     Independent secondary ECMWF IFS model fallback (Open-Meteo free API).
     Ensures Windy NEVER copies AccuWeather even if Windy's API ever fails,
-    and guarantees every target date has valid meteorological values (never N/A).
+    extracting 8 AM to 5 PM rain only and maximum daily cloud cover.
     """
     res = {}
     for d in target_dates:
         res[d] = {"rain_mm": 0.0, "cloud": 20.0, "remark": "GO"}
     try:
-        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=precipitation_sum,cloudcover_mean&models=ecmwf_ifs025&timezone=Asia%2FKolkata"
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=precipitation,cloudcover&models=ecmwf_ifs025&timezone=Asia%2FKolkata"
         r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         if r.status_code == 200:
             data = r.json()
-            daily = data.get("daily", {})
-            times = daily.get("time", [])
-            precips = daily.get("precipitation_sum", [])
-            clouds = daily.get("cloudcover_mean", [])
-            date_map = {}
+            hourly = data.get("hourly", {})
+            times = hourly.get("time", [])
+            precips = hourly.get("precipitation", [])
+            clouds = hourly.get("cloudcover", [])
+
+            date_data = {}
             for i, t_str in enumerate(times):
-                d_obj = datetime.strptime(t_str, "%Y-%m-%d").date()
-                p_val = round(float(precips[i]), 1) if i < len(precips) and precips[i] is not None else 0.0
+                dt_obj = datetime.strptime(t_str, "%Y-%m-%dT%H:%M")
+                d_obj = dt_obj.date()
+                if d_obj not in date_data:
+                    date_data[d_obj] = {"rain": 0.0, "clouds": []}
+
+                p_val = float(precips[i]) if i < len(precips) and precips[i] is not None else 0.0
+                if 8 <= dt_obj.hour <= 17:
+                    date_data[d_obj]["rain"] += p_val
+
                 c_val = float(clouds[i]) if i < len(clouds) and clouds[i] is not None else 25.0
-                r_stat = classify_rain(p_val)
-                c_stat = classify_cloud(c_val)
-                remark = decide_status(r_stat, c_stat)
-                date_map[d_obj] = {"rain_mm": p_val, "cloud": c_val, "remark": remark}
+                date_data[d_obj]["clouds"].append(c_val)
+
             for td in target_dates:
-                if td in date_map:
-                    res[td] = date_map[td]
+                if td in date_data:
+                    rain_mm = round(date_data[td]["rain"], 1)
+                    max_c = max(date_data[td]["clouds"]) if date_data[td]["clouds"] else 25.0
+                    r_stat = classify_rain(rain_mm)
+                    c_stat = classify_cloud(max_c)
+                    remark = decide_status(r_stat, c_stat)
+                    res[td] = {"rain_mm": rain_mm, "cloud": max_c, "remark": remark}
     except Exception as e:
         print(f"[Open-Meteo ECMWF fallback] Error: {e}")
     return res
@@ -507,36 +518,37 @@ async def fetch_windy_ecmwf_data(
 
     if ts_list:
         for t_date in target_dates:
-            day_rain = 0.0
+            daytime_rain = 0.0
             day_clouds = []
-            daytime_clouds = []
 
             for idx, ts in enumerate(ts_list):
                 dt_ist = datetime.fromtimestamp(ts / 1000, tz=timezone.utc) + timedelta(hours=5, minutes=30)
                 if dt_ist.date() == t_date:
                     local_hr = hour_list[idx] if idx < len(hour_list) else dt_ist.hour
                     p_val = float(precip_list[idx]) if idx < len(precip_list) else 0.0
-                    day_rain += p_val
+                    
+                    # Rain from 8 AM to 5 PM only
+                    if 8 <= local_hr <= 17:
+                        daytime_rain += p_val
+
+                    # Max cloud cover amount of the day at the place
                     ic_val = int(icon_list[idx]) if idx < len(icon_list) else 1
                     c_pct = parse_windy_cloud_from_icon(ic_val)
                     day_clouds.append(c_pct)
-                    if local_hr in [8, 11, 14, 17]:
-                        daytime_clouds.append(c_pct)
 
-            clouds_to_use = daytime_clouds if daytime_clouds else day_clouds
-            mean_cloud = round(sum(clouds_to_use) / len(clouds_to_use), 1) if clouds_to_use else 25.0
-            day_rain = round(day_rain, 1)
-            r_stat = classify_rain(day_rain)
-            c_stat = classify_cloud(mean_cloud)
+            max_cloud = max(day_clouds) if day_clouds else 25.0
+            daytime_rain = round(daytime_rain, 1)
+            r_stat = classify_rain(daytime_rain)
+            c_stat = classify_cloud(max_cloud)
             remark = decide_status(r_stat, c_stat)
 
             results_by_date[t_date] = {
-                "rain_mm": day_rain,
-                "cloud": mean_cloud,
+                "rain_mm": daytime_rain,
+                "cloud": max_cloud,
                 "remark": remark
             }
             d_fmt = t_date.strftime("%d %b").upper()
-            await emit(f"  Windy - {name} [{d_fmt}]: Rain {day_rain}mm, Cloud {int(mean_cloud)}% ({remark})")
+            await emit(f"  Windy - {name} [{d_fmt}]: Rain {daytime_rain}mm (8AM-5PM), Cloud {int(max_cloud)}% max ({remark})")
     else:
         await emit(f"  Windy node unreachable for {name}; querying independent ECMWF IFS model...")
         om_ecmwf = await fetch_ecmwf_open_meteo(lat, lon, target_dates)
