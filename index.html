@@ -560,10 +560,10 @@
 
 <script>
   const DEFAULT_CITIES = [
-    { name: "Nashik", state: "Maharashtra", lat: 20.0110, lon: 73.7900, accu_url: "https://www.accuweather.com/en/in/nashik/189304/daily-weather-forecast/189304" },
+    { name: "Nashik", state: "Maharashtra", lat: 20.0020, lon: 73.7940, accu_url: "https://www.accuweather.com/en/in/nashik/189304/daily-weather-forecast/189304" },
     { name: "Mumbai", state: "Maharashtra", lat: 19.0760, lon: 72.8777, accu_url: "https://www.accuweather.com/en/in/mumbai/204842/daily-weather-forecast/204842" },
     { name: "Pune", state: "Maharashtra", lat: 18.5204, lon: 73.8567, accu_url: "https://www.accuweather.com/en/in/pune/204848/daily-weather-forecast/204848" },
-    { name: "Shirdi", state: "Maharashtra", lat: 19.7662, lon: 74.4774, accu_url: "https://www.accuweather.com/en/in/shirdi/204490/daily-weather-forecast/204490" },
+    { name: "Shirdi", state: "Maharashtra", lat: 19.7110, lon: 74.4920, accu_url: "https://www.accuweather.com/en/in/shirdi/204490/daily-weather-forecast/204490" },
   ];
   let selectedCities = [...DEFAULT_CITIES];
 
@@ -622,9 +622,9 @@
   function loadFormState() {
     try {
       const defVer = localStorage.getItem('wx_defaults_ver');
-      if (defVer !== '2026_10_30_nashik_mumbai_pune_shirdi') {
+      if (defVer !== '2026_10_30_canonical_v3') {
         selectedCities = [...DEFAULT_CITIES];
-        localStorage.setItem('wx_defaults_ver', '2026_10_30_nashik_mumbai_pune_shirdi');
+        localStorage.setItem('wx_defaults_ver', '2026_10_30_canonical_v3');
         saveFormState();
       } else {
         const saved = localStorage.getItem('wx_selected_cities');

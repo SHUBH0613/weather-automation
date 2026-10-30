@@ -124,13 +124,49 @@ def load_default_config():
             return json.load(f)
     return {
         "locations": [
-            {"name": "Nashik", "state": "Maharashtra", "lat": 20.0110, "lon": 73.7900},
+            {"name": "Nashik", "state": "Maharashtra", "lat": 20.0020, "lon": 73.7940},
             {"name": "Mumbai", "state": "Maharashtra", "lat": 19.0760, "lon": 72.8777},
             {"name": "Pune", "state": "Maharashtra", "lat": 18.5204, "lon": 73.8567},
-            {"name": "Shirdi", "state": "Maharashtra", "lat": 19.7662, "lon": 74.4774},
+            {"name": "Shirdi", "state": "Maharashtra", "lat": 19.7110, "lon": 74.4920},
         ],
         "timezone": "Asia/Kolkata"
     }
+
+# Canonical City Coordinates to ensure 100% precision with Windy & ECMWF grid points
+CANONICAL_CITY_COORDS = {
+    "shirdi": (19.7110, 74.4920),
+    "shirdi airport": (19.6890, 74.3780),
+    "nashik": (20.0020, 73.7940),
+    "mumbai": (19.0760, 72.8777),
+    "pune": (18.5204, 73.8567),
+    "ahilyanagar": (19.0950, 74.7480),
+    "ahmednagar": (19.0950, 74.7480),
+    "aurangabad": (19.8762, 75.3433),
+    "chhatrapati sambhajinagar": (19.8762, 75.3433),
+    "nagpur": (21.1458, 79.0882),
+    "thane": (19.2183, 72.9781),
+    "solapur": (17.6599, 75.9064),
+    "kolhapur": (16.7050, 74.2433),
+    "delhi": (28.6139, 77.2090),
+    "new delhi": (28.6139, 77.2090),
+    "bengaluru": (12.9716, 77.5946),
+    "bangalore": (12.9716, 77.5946),
+    "hyderabad": (17.3850, 78.4867),
+    "chennai": (13.0827, 80.2707),
+    "bidar": (17.9104, 77.5199),
+    "kadapa": (14.4673, 78.8242),
+    "cuddapah": (14.4673, 78.8242),
+    "tirupati": (13.6288, 79.4192),
+    "ahmedabad": (23.0225, 72.5714),
+    "jaipur": (26.9124, 75.7873),
+    "jhansi": (25.4484, 78.5685),
+    "bhopal": (23.2599, 77.4126),
+    "indore": (22.7196, 75.8577),
+    "gwalior": (26.2183, 78.1828),
+    "jabalpur": (23.1815, 79.9864),
+    "kanpur": (26.4499, 80.3319),
+    "lucknow": (26.8467, 80.9462),
+}
 
 # ── Date String Parser Helper ───────────────────────────────────────────────
 def parse_date_str(d_str: Optional[str], fallback: date) -> date:
@@ -149,6 +185,7 @@ KNOWN_ACCU_LOCATIONS = {
     "mumbai": "https://www.accuweather.com/en/in/mumbai/204842/daily-weather-forecast/204842",
     "pune": "https://www.accuweather.com/en/in/pune/204848/daily-weather-forecast/204848",
     "shirdi": "https://www.accuweather.com/en/in/shirdi/204490/daily-weather-forecast/204490",
+    "shirdi airport": "https://www.accuweather.com/en/in/shirdi/204490/daily-weather-forecast/204490",
     "ahmednagar": "https://www.accuweather.com/en/in/ahilyanagar/8-189314_1_al/daily-weather-forecast/8-189314_1_al",
     "ahilyanagar": "https://www.accuweather.com/en/in/ahilyanagar/8-189314_1_al/daily-weather-forecast/8-189314_1_al",
     "aurangabad": "https://www.accuweather.com/en/in/chhatrapati-sambhajinagar/189320/daily-weather-forecast/189320",
@@ -662,11 +699,18 @@ async def run_automation(
         locations = cfg["locations"]
 
     # Sanitize locations: strip diacritics / transliterated macrons (e.g. Jhānsi -> Jhansi)
+    # and map to canonical Windy/ECMWF coordinates for pinpoint forecast accuracy
     cleaned_locs = []
     for loc in locations:
         cloc = dict(loc)
-        cloc["name"] = clean_location_name(cloc.get("name", ""))
+        raw_name = clean_location_name(cloc.get("name", ""))
+        cloc["name"] = raw_name
         cloc["state"] = clean_location_name(cloc.get("state", ""))
+        norm_key = re.sub(r'[^a-z0-9 ]', '', raw_name.lower()).strip()
+        if norm_key in CANONICAL_CITY_COORDS:
+            c_lat, c_lon = CANONICAL_CITY_COORDS[norm_key]
+            cloc["lat"] = c_lat
+            cloc["lon"] = c_lon
         cleaned_locs.append(cloc)
     locations = cleaned_locs
 

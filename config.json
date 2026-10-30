@@ -4,8 +4,8 @@
     {
       "name": "Nashik",
       "state": "Maharashtra",
-      "lat": 20.0110,
-      "lon": 73.7900,
+      "lat": 20.0020,
+      "lon": 73.7940,
       "accu_query": "Nashik Maharashtra India",
       "accu_url": "https://www.accuweather.com/en/in/nashik/189304/daily-weather-forecast/189304"
     },
@@ -28,8 +28,8 @@
     {
       "name": "Shirdi",
       "state": "Maharashtra",
-      "lat": 19.7662,
-      "lon": 74.4774,
+      "lat": 19.7110,
+      "lon": 74.4920,
       "accu_query": "Shirdi Maharashtra India",
       "accu_url": "https://www.accuweather.com/en/in/shirdi/204490/daily-weather-forecast/204490"
     }

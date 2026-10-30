@@ -9,4 +9,5 @@ windy_*.png
 *.pptx
 !template/weather_template.pptx
 !template/imd_legend_horizontal.png
+scratch/
 
