@@ -127,8 +127,7 @@ def load_default_config():
             {"name": "Nashik", "state": "Maharashtra", "lat": 20.0110, "lon": 73.7900},
             {"name": "Mumbai", "state": "Maharashtra", "lat": 19.0760, "lon": 72.8777},
             {"name": "Pune", "state": "Maharashtra", "lat": 18.5204, "lon": 73.8567},
-            {"name": "Ahmednagar", "state": "Maharashtra", "lat": 19.0948, "lon": 74.7479},
-            {"name": "Aurangabad", "state": "Maharashtra", "lat": 19.8762, "lon": 75.3433},
+            {"name": "Shirdi", "state": "Maharashtra", "lat": 19.7662, "lon": 74.4774},
         ],
         "timezone": "Asia/Kolkata"
     }
@@ -149,6 +148,7 @@ KNOWN_ACCU_LOCATIONS = {
     "nashik": "https://www.accuweather.com/en/in/nashik/189304/daily-weather-forecast/189304",
     "mumbai": "https://www.accuweather.com/en/in/mumbai/204842/daily-weather-forecast/204842",
     "pune": "https://www.accuweather.com/en/in/pune/204848/daily-weather-forecast/204848",
+    "shirdi": "https://www.accuweather.com/en/in/shirdi/204490/daily-weather-forecast/204490",
     "ahmednagar": "https://www.accuweather.com/en/in/ahilyanagar/8-189314_1_al/daily-weather-forecast/8-189314_1_al",
     "ahilyanagar": "https://www.accuweather.com/en/in/ahilyanagar/8-189314_1_al/daily-weather-forecast/8-189314_1_al",
     "aurangabad": "https://www.accuweather.com/en/in/chhatrapati-sambhajinagar/189320/daily-weather-forecast/189320",

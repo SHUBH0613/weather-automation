@@ -469,7 +469,7 @@
   <!-- City Search & Chip List -->
   <div class="form-group">
     <div class="section-title">
-      <span>Cities (<span id="city-count">5</span>)</span>
+      <span>Cities (<span id="city-count">4</span>)</span>
       <span class="clear-link" onclick="clearCities()">Clear all</span>
     </div>
     <div class="search-wrapper">
@@ -478,7 +478,7 @@
         type="text"
         id="city-search"
         class="search-input"
-        placeholder="Type city name (e.g. Nashik, Bhuj, Jaipur, Pune)..."
+        placeholder="Type city name (e.g. Nashik, Mumbai, Pune, Shirdi)..."
         autocomplete="off"
       />
       <div id="autocomplete-list" class="autocomplete-list"></div>
@@ -559,13 +559,13 @@
 </div>
 
 <script>
-  let selectedCities = [
+  const DEFAULT_CITIES = [
     { name: "Nashik", state: "Maharashtra", lat: 20.0110, lon: 73.7900, accu_url: "https://www.accuweather.com/en/in/nashik/189304/daily-weather-forecast/189304" },
-    { name: "Bidar", state: "Karnataka", lat: 17.9104, lon: 77.5199, accu_url: "https://www.accuweather.com/en/in/bidar/188753/daily-weather-forecast/188753" },
-    { name: "Kadapa", state: "Andhra Pradesh", lat: 14.4673, lon: 78.8242, accu_url: "https://www.accuweather.com/en/in/kadapa/186821/daily-weather-forecast/186821" },
-    { name: "Tirupati", state: "Andhra Pradesh", lat: 13.6288, lon: 79.4192, accu_url: "https://www.accuweather.com/en/in/tirupati/2842614/daily-weather-forecast/2842614" },
-    { name: "Chennai", state: "Tamil Nadu", lat: 13.0827, lon: 80.2707, accu_url: "https://www.accuweather.com/en/in/chennai/206671/daily-weather-forecast/206671" },
+    { name: "Mumbai", state: "Maharashtra", lat: 19.0760, lon: 72.8777, accu_url: "https://www.accuweather.com/en/in/mumbai/204842/daily-weather-forecast/204842" },
+    { name: "Pune", state: "Maharashtra", lat: 18.5204, lon: 73.8567, accu_url: "https://www.accuweather.com/en/in/pune/204848/daily-weather-forecast/204848" },
+    { name: "Shirdi", state: "Maharashtra", lat: 19.7662, lon: 74.4774, accu_url: "https://www.accuweather.com/en/in/shirdi/204490/daily-weather-forecast/204490" },
   ];
+  let selectedCities = [...DEFAULT_CITIES];
 
   let evtSource = null;
   let stepCount = 0;
@@ -621,11 +621,18 @@
 
   function loadFormState() {
     try {
-      const saved = localStorage.getItem('wx_selected_cities');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          selectedCities = parsed;
+      const defVer = localStorage.getItem('wx_defaults_ver');
+      if (defVer !== '2026_10_30_nashik_mumbai_pune_shirdi') {
+        selectedCities = [...DEFAULT_CITIES];
+        localStorage.setItem('wx_defaults_ver', '2026_10_30_nashik_mumbai_pune_shirdi');
+        saveFormState();
+      } else {
+        const saved = localStorage.getItem('wx_selected_cities');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            selectedCities = parsed;
+          }
         }
       }
       const sDate = localStorage.getItem('wx_start_date');
