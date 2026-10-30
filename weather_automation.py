@@ -124,19 +124,19 @@ def load_default_config():
             return json.load(f)
     return {
         "locations": [
-            {"name": "Nashik", "state": "Maharashtra", "lat": 20.0020, "lon": 73.7940},
+            {"name": "Nashik", "state": "Maharashtra", "lat": 19.9975, "lon": 73.7898},
             {"name": "Mumbai", "state": "Maharashtra", "lat": 19.0760, "lon": 72.8777},
             {"name": "Pune", "state": "Maharashtra", "lat": 18.5204, "lon": 73.8567},
-            {"name": "Shirdi", "state": "Maharashtra", "lat": 19.7110, "lon": 74.4920},
+            {"name": "Shirdi", "state": "Maharashtra", "lat": 19.7670, "lon": 74.4750},
         ],
         "timezone": "Asia/Kolkata"
     }
 
 # Canonical City Coordinates to ensure 100% precision with Windy & ECMWF grid points
 CANONICAL_CITY_COORDS = {
-    "shirdi": (19.7110, 74.4920),
+    "shirdi": (19.7670, 74.4750),
     "shirdi airport": (19.6890, 74.3780),
-    "nashik": (20.0020, 73.7940),
+    "nashik": (19.9975, 73.7898),
     "mumbai": (19.0760, 72.8777),
     "pune": (18.5204, 73.8567),
     "ahilyanagar": (19.0950, 74.7480),
@@ -441,7 +441,7 @@ async def fetch_ecmwf_open_meteo(lat: float, lon: float, target_dates: List[date
             date_map = {}
             for i, t_str in enumerate(times):
                 d_obj = datetime.strptime(t_str, "%Y-%m-%d").date()
-                p_val = round(float(precips[i]) * 0.75, 1) if i < len(precips) and precips[i] is not None else 0.0
+                p_val = round(float(precips[i]), 1) if i < len(precips) and precips[i] is not None else 0.0
                 c_val = float(clouds[i]) if i < len(clouds) and clouds[i] is not None else 25.0
                 r_stat = classify_rain(p_val)
                 c_stat = classify_cloud(c_val)
@@ -507,32 +507,36 @@ async def fetch_windy_ecmwf_data(
 
     if ts_list:
         for t_date in target_dates:
-            daytime_rain = 0.0
+            day_rain = 0.0
+            day_clouds = []
             daytime_clouds = []
 
             for idx, ts in enumerate(ts_list):
                 dt_ist = datetime.fromtimestamp(ts / 1000, tz=timezone.utc) + timedelta(hours=5, minutes=30)
                 if dt_ist.date() == t_date:
                     local_hr = hour_list[idx] if idx < len(hour_list) else dt_ist.hour
+                    p_val = float(precip_list[idx]) if idx < len(precip_list) else 0.0
+                    day_rain += p_val
+                    ic_val = int(icon_list[idx]) if idx < len(icon_list) else 1
+                    c_pct = parse_windy_cloud_from_icon(ic_val)
+                    day_clouds.append(c_pct)
                     if local_hr in [8, 11, 14, 17]:
-                        p_val = float(precip_list[idx]) if idx < len(precip_list) else 0.0
-                        daytime_rain += p_val
-                        ic_val = int(icon_list[idx]) if idx < len(icon_list) else 1
-                        daytime_clouds.append(parse_windy_cloud_from_icon(ic_val))
+                        daytime_clouds.append(c_pct)
 
-            max_cloud = max(daytime_clouds) if daytime_clouds else 25.0
-            daytime_rain = round(daytime_rain, 1)
-            r_stat = classify_rain(daytime_rain)
-            c_stat = classify_cloud(max_cloud)
+            clouds_to_use = daytime_clouds if daytime_clouds else day_clouds
+            mean_cloud = round(sum(clouds_to_use) / len(clouds_to_use), 1) if clouds_to_use else 25.0
+            day_rain = round(day_rain, 1)
+            r_stat = classify_rain(day_rain)
+            c_stat = classify_cloud(mean_cloud)
             remark = decide_status(r_stat, c_stat)
 
             results_by_date[t_date] = {
-                "rain_mm": daytime_rain,
-                "cloud": max_cloud,
+                "rain_mm": day_rain,
+                "cloud": mean_cloud,
                 "remark": remark
             }
             d_fmt = t_date.strftime("%d %b").upper()
-            await emit(f"  Windy - {name} [{d_fmt}]: Rain {daytime_rain}mm (8AM-5PM), Cloud {int(max_cloud)}% ({remark})")
+            await emit(f"  Windy - {name} [{d_fmt}]: Rain {day_rain}mm, Cloud {int(mean_cloud)}% ({remark})")
     else:
         await emit(f"  Windy node unreachable for {name}; querying independent ECMWF IFS model...")
         om_ecmwf = await fetch_ecmwf_open_meteo(lat, lon, target_dates)
