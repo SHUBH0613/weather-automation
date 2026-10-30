@@ -573,10 +573,13 @@
   let searchDebounceTimer = null;
 
   // ── Timer state ─────────────────────────────────────────────────────────────
-  let _timerInterval = null;   // setInterval handle for the countdown tick
-  let _pollInterval  = null;   // setInterval handle for mobile fallback polling
-  let _jobStartTime  = null;   // Date.now() when job started
-  let _etaSeconds    = 120;    // estimated total duration in seconds
+  let _timerInterval   = null;   // setInterval handle for the countdown tick
+  let _pollInterval    = null;   // setInterval handle for mobile fallback polling
+  let _jobStartTime    = null;   // Date.now() when job started
+  let _etaSeconds      = 120;    // estimated total duration in seconds
+  let _imdDaysTotal    = 1;      // total target days requested
+  let _imdDaysDone     = 0;      // IMD warning maps captured count
+  let _activeStage     = 'Phase 1/3: Extracting AccuWeather forecasts…';
 
   const searchInput    = document.getElementById('city-search');
   const autoList       = document.getElementById('autocomplete-list');
@@ -646,33 +649,90 @@
   }
 
   // ── ETA calculation ─────────────────────────────────────────────────────────
-  // AccuWeather (~6s) + IMD GIS (~14s per day) + Windy ECMWF (~5s total) + PPT (~4s) + buffer
+  // Realistic durations on Render cloud container (0.5 vCPU):
+  // - AccuWeather: ~14s base + ~1s per extra city over 4
+  // - IMD GIS Maps: ~26s per day (GIS portal load, tiles, canvas screenshot & page recycling)
+  // - Windy ECMWF: ~24s base (Chromium launch, windy navigation, warm-up, evaluate) + ~2.5s per extra city
+  // - PowerPoint build: ~6s
   function calcEta() {
-    const numCities = selectedCities.length || 4;
-    const numDays   = Math.max(parseInt(rangeLabel.textContent) || 1, 1);
-    return Math.max(45, 18 + (numDays * 15) + (numCities * 2));
+    const numCities   = selectedCities.length || 4;
+    const numDays     = Math.max(parseInt(rangeLabel.textContent) || 1, 1);
+    const extraCities = Math.max(0, numCities - 4);
+    const accuEst     = 14 + (extraCities * 1);
+    const imdEst      = numDays * 26;
+    const windyEst    = 24 + (extraCities * 2.5);
+    const pptEst      = 6;
+    return Math.round(accuEst + imdEst + windyEst + pptEst);
   }
 
   function adjustTimerPhase(msg) {
     if (!msg || !_jobStartTime) return;
-    const numDays = Math.max(parseInt(rangeLabel.textContent) || 1, 1);
     const elapsed = (Date.now() - _jobStartTime) / 1000;
+    const extraCities = Math.max(0, (selectedCities.length || 4) - 4);
 
-    if (msg.includes('Phase 2') || msg.includes('IMD Warning maps')) {
-      const needed = Math.max(25, numDays * 14 + 10);
+    if (msg.includes('Phase 1') || msg.includes('AccuWeather - fetching')) {
+      _activeStage = 'Phase 1/3: Extracting AccuWeather forecasts…';
+      const needed = 10 + (_imdDaysTotal * 26) + 24 + 6;
       if (_etaSeconds - elapsed < needed) {
         _etaSeconds = elapsed + needed;
       }
-    } else if (msg.includes('Phase 3') || msg.includes('Windy ECMWF')) {
-      _etaSeconds = Math.max(_etaSeconds, elapsed + 10);
-    } else if (msg.includes('Compiling') || msg.includes('Generating') || msg.includes('PowerPoint')) {
-      _etaSeconds = Math.max(_etaSeconds, elapsed + 4);
+    } else if (msg.includes('AccuWeather extraction complete')) {
+      _activeStage = 'Phase 2/3: Loading IMD GIS Warning Maps…';
+      const needed = (_imdDaysTotal * 26) + 24 + 6;
+      if (_etaSeconds - elapsed < needed) {
+        _etaSeconds = elapsed + needed;
+      }
+    } else if (msg.includes('Phase 2') || msg.includes('IMD Warning maps...') || msg.includes('Opening District-wise')) {
+      _activeStage = `Phase 2/3: Capturing IMD Warning Maps (Day ${Math.min(_imdDaysDone + 1, _imdDaysTotal)} of ${_imdDaysTotal})…`;
+      const remainDays = Math.max(0, _imdDaysTotal - _imdDaysDone);
+      const needed = (remainDays * 26) + 24 + 6;
+      if (_etaSeconds - elapsed < needed) {
+        _etaSeconds = elapsed + needed;
+      }
+    } else if (msg.includes('loading map...') || msg.includes('framing')) {
+      const matchDay = msg.match(/IMD Day\s+(\d+)/i);
+      const currentDayNum = matchDay ? parseInt(matchDay[1], 10) : Math.min(_imdDaysDone + 1, _imdDaysTotal);
+      _activeStage = `Phase 2/3: Capturing IMD Warning Maps (Day ${currentDayNum} of ${_imdDaysTotal})…`;
+    } else if (msg.includes('warning map captured') || msg.includes('Exceeds 6-day forecast horizon')) {
+      _imdDaysDone = Math.min(_imdDaysTotal, _imdDaysDone + 1);
+      const remainDays = Math.max(0, _imdDaysTotal - _imdDaysDone);
+      if (remainDays > 0) {
+        _activeStage = `Phase 2/3: Capturing IMD Warning Maps (Day ${Math.min(_imdDaysDone + 1, _imdDaysTotal)} of ${_imdDaysTotal})…`;
+      } else {
+        _activeStage = 'Phase 2/3: IMD Warning Maps complete…';
+      }
+      const needed = (remainDays * 26) + 24 + 6;
+      if (_etaSeconds - elapsed < needed) {
+        _etaSeconds = elapsed + needed;
+      }
+    } else if (msg.includes('Phase 3') || msg.includes('Windy ECMWF') || msg.includes('Launching Windy')) {
+      _activeStage = 'Phase 3/3: Extracting Windy ECMWF forecasts…';
+      const needed = 22 + (extraCities * 2.5) + 6;
+      if (_etaSeconds - elapsed < needed) {
+        _etaSeconds = elapsed + needed;
+      }
+    } else if (msg.includes('Windy - Fetching')) {
+      const mCity = msg.match(/Windy - Fetching\s+([A-Za-z0-9\s]+?)\s+\(/);
+      const cName = mCity ? mCity[1].trim() : 'locations';
+      _activeStage = `Phase 3/3: Querying Windy ECMWF for ${cName}…`;
+    } else if (msg.includes('Windy extraction complete')) {
+      _activeStage = 'Compiling PowerPoint presentation slides…';
+      const needed = 6;
+      if (_etaSeconds - elapsed < needed) {
+        _etaSeconds = elapsed + needed;
+      }
+    } else if (msg.includes('Generating PowerPoint') || msg.includes('Compiling')) {
+      _activeStage = 'Finalizing PowerPoint presentation slides…';
+      const needed = 4;
+      if (_etaSeconds - elapsed < needed) {
+        _etaSeconds = elapsed + needed;
+      }
     }
   }
 
-  function startTimer(totalSec) {
+  function startTimer(totalSec, elapsedSec = 0) {
     _etaSeconds   = totalSec;
-    _jobStartTime = Date.now();
+    _jobStartTime = Date.now() - (elapsedSec * 1000);
     timerBar.style.display = 'block';
     progressFill.style.width = '0%';
     _clearTimer();
@@ -681,21 +741,23 @@
       const elapsed  = (Date.now() - _jobStartTime) / 1000;
       let remaining = Math.max(0, _etaSeconds - elapsed);
 
-      // Prevent premature 00:00 while backend job is still actively running
-      if (!currentFilename && remaining < 3) {
-        remaining = 3;
+      // Smooth dynamic pacing: NEVER freeze at 00:03 or stop ticking while job is actively running!
+      if (!currentFilename && remaining < 4) {
+        _etaSeconds = elapsed + 5;
+        remaining   = 5;
       }
 
-      const pct = currentFilename ? 100 : Math.min(95, (elapsed / Math.max(_etaSeconds, elapsed + remaining)) * 100);
+      const totalExpected = Math.max(_etaSeconds, elapsed + remaining);
+      const pct = currentFilename ? 100 : Math.min(95, (elapsed / totalExpected) * 100);
       const m = String(Math.floor(remaining / 60)).padStart(2, '0');
       const s = String(Math.floor(remaining % 60)).padStart(2, '0');
       timerDigits.textContent = `${m}:${s}`;
       progressFill.style.width = `${pct}%`;
 
-      if (remaining <= 3 && !currentFilename) {
-        timerEta.textContent = 'Processing live weather data & preparing slides…';
+      if (remaining <= 5 && !currentFilename) {
+        timerEta.textContent = `${_activeStage} · Finalizing output presentation (almost ready)…`;
       } else {
-        timerEta.textContent = `Elapsed ${Math.floor(elapsed)}s · ~${Math.ceil(remaining)}s remaining`;
+        timerEta.textContent = `${_activeStage} · ~${Math.ceil(remaining)}s remaining (Elapsed ${Math.floor(elapsed)}s)`;
       }
     }, 1000);
   }
@@ -901,9 +963,13 @@
     currentFilename          = null;
     _clearTimer();
 
+    _imdDaysTotal = Math.max(parseInt(rangeLabel.textContent) || 1, 1);
+    _imdDaysDone  = 0;
+    _activeStage  = 'Phase 1/3: Extracting AccuWeather forecasts…';
+
     // Start countdown with calibrated duration
     const eta = calcEta();
-    startTimer(eta);
+    startTimer(eta, 0);
     startPolling();
 
     if (evtSource) { evtSource.close(); evtSource = null; }
@@ -1043,10 +1109,19 @@
             panel.style.display   = 'block';
             if (log.children.length === 0) {
               addLog('Reconnected to active automation…', 'info');
+              if (Array.isArray(s.messages)) {
+                s.messages.slice(-8).forEach(m => {
+                  addLog(m.replace(/^DONE:.*/, 'PowerPoint presentation saved ✓'), classifyMsg(m));
+                });
+              }
             }
+            _imdDaysTotal = Math.max(parseInt(rangeLabel.textContent) || 1, 1);
+            _imdDaysDone  = 0;
             const totalEta = calcEta();
-            const remaining = Math.max(totalEta - Math.floor(s.elapsed || 0), 10);
-            startTimer(remaining);
+            startTimer(totalEta, Math.floor(s.elapsed || 0));
+            if (Array.isArray(s.messages)) {
+              s.messages.forEach(m => adjustTimerPhase(m));
+            }
             startPolling();
             connectSSE();
           }
